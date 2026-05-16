@@ -8,9 +8,6 @@ def rebrand_lw6data(filepath):
     import numpy as np
     import scipy.io as sci
     meta_data = sci.loadmat(filepath)
-    #
-    # keys_new = meta_data["header"].dtype.names
-    # keys_new.extend(["fs","activation"])
 
     print("the keys in old data are: ", meta_data["header"].dtype.names)
 
@@ -82,7 +79,7 @@ def rebrand_lw6data(filepath):
     }
 
     print("the keys in the new data are: ", new_data.keys())
-    return new_data
+    return assign(new_data)
 
 def assign(data):
     import numpy as np

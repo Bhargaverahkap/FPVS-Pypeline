@@ -13,11 +13,9 @@ def preprocessFPVSdata_phase1(matfilepath = None, metafilepath = None, configfil
     from pathlib import Path
     import h5py
     import numpy as np
-    import scipy.io as sci
     from scipy.signal import butter, filtfilt, iirnotch
     import importlib
     import cust_funcs as cf
-    import pickle
     importlib.reload(cf)
 
     #Checks to make sure that matfile/metafile are really what they claim they are.
