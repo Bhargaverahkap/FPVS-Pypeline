@@ -25,7 +25,6 @@ def preprocessFPVSdata_phase1(matfilepath = None, metafilepath = None, configfil
     if metafilepath.suffix != '.lw6':
         metafilepath = matfilepath.with_suffix('.lw6')
 
-    # 1. load the file only after altering channel labels
     with h5py.File(matfilepath, 'r') as f:
         # List all variables
         mat_data = f['data'][:]
@@ -36,31 +35,32 @@ def preprocessFPVSdata_phase1(matfilepath = None, metafilepath = None, configfil
 
     #renaming the mat/lw6 filenames for saving the intermediary steps.
     metafilepath = metafilepath.with_suffix(".pkl")
+    matfilepath = matfilepath.with_suffix(".npy")
     print(metafilepath)
-
     cf.saveMetadata(meta_data,metafilepath)
 
     np.save(matfilepath, mat_data)
-    print("data is saved as: ", metafilepath.stem)
+    print("data is saved as: ", metafilepath)
     print("\n")
 
     #1. rename channels
-    labels  = cf.assign(meta_data["chanlocs"]["labels"])
+    labels  = (meta_data["chanlocs"]["labels"])
     targets = ["EXG1", "EXG2", "EXG3", "EXG4"]
     replacements = ["I1", "I2", "PO9", "PO10"]
-
-    idx = np.where(np.isin(labels, targets))[0]
-    labels[idx] = replacements
-
+    mapping = dict(zip(targets, replacements))
+    labels = [mapping.get(label, label) for label in labels]
     meta_data["chanlocs"]["labels"] = labels
+
     meta_data = cf.updatemetadataHistory(meta_data,"1_chanlabels")
-    metafilepath = metafilepath.with_name("1_chanlabels " + metafilepath.stem)
+    metafilepath = metafilepath.with_name("1_chanlabels " + metafilepath.stem + metafilepath.suffix)
+    metafilepath = metafilepath.with_suffix(".pkl")
+
     matfilepath = matfilepath.with_name("1_chanlabels " + matfilepath.stem)
     cf.saveMetadata(meta_data,metafilepath)
 
 
     np.save(matfilepath, mat_data)
-    print("channels are renamed and saved in and as: ", metafilepath.stem)
+    print("channels are renamed and saved in and as: ", metafilepath)
     print("\n")
 
     #2. Electrode location change
@@ -126,11 +126,12 @@ def preprocessFPVSdata_phase1(matfilepath = None, metafilepath = None, configfil
         "chanlocs.sph_phi": "phi angle of channel",
         "chanlocs.sph_theta": "theta angle of channel",
         "chanlocs.sph_phi_besa": "phi angle of channel mapped onto the brain",
-        "chanlocs.sph_theta_besa": "theta angle of channel  mapped onto the brain",
+        "chanlocs.sph_theta_besa": "theta angle of channel mapped onto the brain",
 
     })
     meta_data = cf.updatemetadataHistory(meta_data,"2_chanlocs")
     metafilepath = metafilepath.with_name("2_chanlocs " + metafilepath.stem)
+
     matfilepath = matfilepath.with_name("2_chanlocs " + matfilepath.stem)
     cf.saveMetadata(meta_data,metafilepath)
 
@@ -167,7 +168,7 @@ def preprocessFPVSdata_phase1(matfilepath = None, metafilepath = None, configfil
     print("\n")
 
     #4. delete exg and status channels:
-    labels = np.squeeze(meta_data["chanlocs"]["labels"])
+    labels = meta_data["chanlocs"]["labels"]
     exgindices = np.where(np.char.find(np.char.lower(labels), 'ex') != -1)[0]
     statindice = np.where(np.char.find(np.char.lower(labels), 'status') != -1)[0]
 
@@ -180,12 +181,14 @@ def preprocessFPVSdata_phase1(matfilepath = None, metafilepath = None, configfil
     # deleting data
     mat_data = mat_data[:, mask]
 
-    for n in todeletechid:
-        for key in meta_data["chanlocs"].keys():
-            meta_data["chanlocs"][key].pop(n)
+    for key in meta_data["chanlocs"].keys():
+        arr = meta_data["chanlocs"][key]
+        meta_data["chanlocs"][key] = np.delete(arr, todeletechid)
+
+
     meta_data["shape"] = mat_data.shape
     meta_data["size"] = mat_data.size
-    meta_data["deleted_chnames"] = labels[todeletechid]
+    meta_data["deleted_chnames"] = [labels[i] for i in todeletechid]
     meta_data = cf.updatemetadataHistory(meta_data,"4_chan-select")
     metafilepath = metafilepath.with_name("4_chan-select " + metafilepath.stem)
     matfilepath = matfilepath.with_name("4_chan-select " + matfilepath.stem)
@@ -193,24 +196,24 @@ def preprocessFPVSdata_phase1(matfilepath = None, metafilepath = None, configfil
 
 
     np.save(matfilepath, mat_data)
-    print("channels being deleted are: ", labels[todeletechid])
+    print("channels being deleted are: ", meta_data["deleted_chnames"])
+    print("\n data saved in ",metafilepath)
     print("\n")
 
 
     #5. bandpass and 6. notch filtering
-    fs = int(np.squeeze(meta_data["fs"]))
-    mat_data = mat_data.copy()
-
+    # declaring variables
+    fs = (meta_data["fs"])
     lowcut = 0.05
     highcut = 100
     order = 4
     nch = mat_data.shape[1]
+
     # Design Butterworth bandpass filter
     slope = 2
     nyquist = 0.5 * fs
     low = lowcut / nyquist
     high = highcut / nyquist
-
     notch_param = [50,100]
     b, a = butter(order, [low, high], btype='band')
     bn, an = iirnotch(notch_param[0], slope, fs)
@@ -220,7 +223,7 @@ def preprocessFPVSdata_phase1(matfilepath = None, metafilepath = None, configfil
     # Apply filter
     for chid in range(0, nch, 1):
         signal = mat_data[:, chid]
-        filtered_signal = filtfilt(b, a, signal)  # butterworth filtering
+        filtered_signal = filtfilt(b, a, signal)  # bandpass filtering
         filtered_signal2 = filtfilt(bn, an, filtered_signal)  # 50hz notch filtering
         filtered_signal3 = filtfilt(bn2, an2, filtered_signal2)  # 100hz notch filtering
         filt_data[:, chid] = filtered_signal3
@@ -264,15 +267,15 @@ def preprocessFPVSdata_performICA(matfilepath, metafilepath, ch_name = None):
 
     # Design Butterworth bandpass filter
     lowcut = 1
-    highcut = 30
+    highcut = 10
     order = 4
 
-    fs = int(np.squeeze(meta_data["fs"]))
+    fs = int((meta_data["fs"]))
     slope = 2
     nyquist = 0.5 * fs
     low = lowcut / nyquist
     high = highcut / nyquist
-    fs = int(np.squeeze(meta_data["fs"]))
+    fs = int((meta_data["fs"]))
 
     dataforICA = np.zeros(mat_data.shape)  # removing nonessential dims
     b, a = butter(order,[low, high], btype='band')
@@ -309,6 +312,18 @@ def preprocessFPVSdata_performICA(matfilepath, metafilepath, ch_name = None):
     ica_data = sources.get_data()
     eog_indices, eog_scores = ica.find_bads_eog(raw, ch_name=ch_name)
     return ica, raw, ica_data, eog_indices
+
+def overlayICAondata(matfilepath,metafilepath, ica_data):
+    import numpy as np
+    import cust_funcs as cf
+    import importlib
+    importlib.reload(cf)
+
+    mat_data = np.load(matfilepath)
+    meta_data = cf.loadMetadata(metafilepath)
+    labels = np.array(meta_data["chanlocs"]["labels"], dtype=object)
+    subjid = matfilepath.stem.split()[-1]
+    cf.showmeICAoverlayedondata(mat_data, ica_data, labels=labels,subjid=subjid)
 
 def preprocessFPVSdata_applyICA(matfilepath, metafilepath, ica, raw, rmidx):
     import numpy as np
@@ -349,14 +364,11 @@ def preprocesssFPVSdata_segmentation(matfilepath, metafilepath):
     importlib.reload(cf)
 
     meta_data = cf.loadMetadata(metafilepath)
-
-
     mat_data = np.load(matfilepath)
-
     errorflag = 0
-    fs = int(cf.givemeData(meta_data["fs"]))  # Hz
-    eventid  = cf.assign(meta_data["events"]["code"])
-    timestamps  = cf.assign(meta_data["events"]["latency"].astype(int))
+    fs = (meta_data["fs"])  # Hz
+    eventid = np.array(meta_data["events"]["code"])
+    timestamps = np.array(meta_data["events"]["latency"], dtype=float)
     duration = 70 * fs
 
     unq_eventid = np.unique(eventid)
@@ -365,7 +377,6 @@ def preprocesssFPVSdata_segmentation(matfilepath, metafilepath):
     unq_eventid = unq_eventid.astype(int)
     unq_eventid.sort()
     unq_eventid = unq_eventid.astype(str)
-    # print(unq_eventid)
 
     startcode = np.array([10, 45, 90, 135, 200, 210, 212, 214, 216, 218, 220, 222, 224])
     startcode_ind = np.where(np.isin(unq_eventid.astype(int), startcode))[0]
@@ -408,18 +419,14 @@ def preprocesssFPVSdata_segmentation(matfilepath, metafilepath):
                 # missing stop → infer
                 pairs.append((int(s - 2 * fs), int(s + 68 * fs)))
 
-        # Second: handle stops that were never used (missing starts)
+        # Second: handle stops pairs that were never used (missing starts)
         for i, stop_used in enumerate(used_stops):
             if not stop_used:
                 e = stops[i]
                 pairs.append((int(e - 70 * fs), int(e)))
-                # print(pairs)
 
         pairs = cf.givemeUniqueTuples(pairs, tolerance=2 * fs)
-
-        # pairs = np.array(pairs)
-        # print(pairs)
-        startendsample[eventno] = pairs
+        startendsample[(eventno)] = pairs
         eventreps[eventno] = len(pairs)
 
     for idx, pairs_i in enumerate(startendsample):
@@ -431,49 +438,55 @@ def preprocesssFPVSdata_segmentation(matfilepath, metafilepath):
     # I have then removed the time and sample stamp of all those events that are not relevant to the experiment's analysis like 21/22/50/55
     # trimming the data points
     nch = mat_data.shape[1]
-    ep_data =  np.zeros((17920, nch, 41))
+    ep_data = np.zeros((17920, nch, 41))
     ## add functionality that makes this compatible with all expts, not just this one ie. self calculating the 41 in this case
     count = 0
-    eventandrepdata = np.zeros((41, 2))
-
+    eventrepdata = {}
+    startendsampid = np.zeros([41, 2])
     for eventno in range(len(startcode)):
-        print("Event label being split: ",startcode[eventno])
+        numrep = []
         for iterid in range(int(eventreps[eventno])):
             dsamp_start = startendsample[eventno][iterid][0]
             dsamp_end = startendsample[eventno][iterid][1]
+            startendsampid[count, 0] = dsamp_start
+            startendsampid[count, 1] = dsamp_end
+
             eventrep_dat = np.arange(dsamp_start, dsamp_end, dtype="int")
             # print("range:", dsamp_start, "-", dsamp_end, " length:", dsamp_end - dsamp_start)
             ep_data[:, :nch, count] = mat_data[eventrep_dat, :nch]
-            eventandrepdata[count, 0] = startevents[eventno]
-            eventandrepdata[count, 1] = iterid + 1
+            numrep.append(count)
             count += 1
             # final data will have dimensions like so:(17920, 70, 41)
+        print("Event label being split: ", startevents[eventno], " number of reps: ", len(numrep))
+        eventrepdata[str(startevents[eventno])] = np.array(numrep)
 
-    # print(count)
+    print(startendsampid)
     if errorflag == 0:
         mat_data = ep_data.copy()
-        meta_data["eventrepid"] = eventandrepdata
+        meta_data["eventrepid"] = eventrepdata
 
-    meta_data = cf.updatemetadataHistory(meta_data,"7_ep")
+    meta_data = cf.updatemetadataHistory(meta_data, "7_ep")
     metafilepath = metafilepath.with_name("7_ep " + metafilepath.stem)
     matfilepath = matfilepath.with_name("7_ep " + matfilepath.stem)
 
+    matfilepath = matfilepath.with_suffix(".npy")
+    metafilepath = metafilepath.with_suffix(".pkl")
     np.save(matfilepath, mat_data)
-    cf.saveMetadata(meta_data,metafilepath)
+    cf.saveMetadata(meta_data, metafilepath)
 
-
-    metafilepath = metafilepath.with_suffix(".npy")
     return mat_data, meta_data, metafilepath
 
-def preprocessFPVSdata_phase2(matfilepath, metafilepath,interp_chnames = None, bad_but_ignore = None):
+def preprocessFPVSdata_phase2(matfilepath, metafilepath,interp_chnames = None, bad_but_ignore = None, mergekeyflag = None ):
     import numpy as np
     import importlib
     import cust_funcs as cf
     importlib.reload(cf)
-
+    if mergekeyflag == None:
+        mergekeyflag = True
+        
     mat_data = np.load(matfilepath)
     meta_data = cf.loadMetadata(metafilepath)
-    labels = np.squeeze(meta_data["chanlocs"]["labels"])
+    labels = (meta_data["chanlocs"]["labels"])
     interp_chids = np.where(np.isin(labels, interp_chnames))[0]
     
     # interpolation
@@ -487,7 +500,7 @@ def preprocessFPVSdata_phase2(matfilepath, metafilepath,interp_chnames = None, b
         mat_data[:, interp_chids[i], :] = np.mean(mat_data[:, srtd_idx, :], axis=1)
         new_entry = {interp_chnames[i] : srt_labels[srtd_idx]}
         interp_specs.update(new_entry)
-        print(badch, "is interpolated using ", labels[srtd_idx])
+        print(badch, "is interpolated using ", [labels[i] for i in srtd_idx])
 
     meta_data["interpolation"] = interp_specs
     extn_str = f"{len(interp_chnames)}_interp "
@@ -495,8 +508,6 @@ def preprocessFPVSdata_phase2(matfilepath, metafilepath,interp_chnames = None, b
     metafilepath = matfilepath.with_name(extn_str + metafilepath.stem)
     meta_data = cf.updatemetadataHistory(meta_data,extn_str)
     cf.saveMetadata(meta_data,metafilepath)
-
-
 
     matfilepath = matfilepath.with_name(extn_str + matfilepath.stem)
     np.save(matfilepath, mat_data)
@@ -511,7 +522,7 @@ def preprocessFPVSdata_phase2(matfilepath, metafilepath,interp_chnames = None, b
 
     meta_data["ref_chids"] = goodchids
     matfilepath = matfilepath.with_name("8_ref" + matfilepath.stem)
-    metafilepath = metafilepath.with_name("8_ref" + metafilepath.stem)
+    metafilepath = metafilepath.with_name("8_ref" + metafilepath)
     meta_data = cf.updatemetadataHistory(meta_data,"8_ref")
 
     cf.saveMetadata(meta_data,metafilepath)
@@ -521,25 +532,35 @@ def preprocessFPVSdata_phase2(matfilepath, metafilepath,interp_chnames = None, b
     print("data is referenced and saved as ", metafilepath)
     print("\n")
 
-    ## Splitting data based on
-    strings = metafilepath.stem
-    strings = strings.split(" ")
-    subjid = strings[-1]
+    ## Segmentation
+    subjid = metafilepath.stem.split()[-1]
     if len(subjid) != 8:  # Prevents taking 'lw6' as the subject id as we know that subject id is usually 8 characters long
-        subjid = strings[-2]
+        subjid = metafilepath.stem.split()[-2]
     print(len(subjid))
 
-    slices = {
-        "10": (0, 5),
-        "135": (5, 10),
-        "45": (31, 36),
-        "90": (36, 41),
-        "200": (10, 15),
-        "TOP": (15, 19),
-        "DOWN": (19, 23),
-        "RIGHT": (23, 27),
-        "LEFT": (27, 31),
+    # default value is that some events need to be merged. if this is set to 0 then no event is merged
+    mergekeys = {
+        "TOP": [210, 212],
+        "BOTTOM": [214, 216],
+        "RIGHT": [218, 220],
+        "LEFT": [222, 224]
     }
+
+    slices = meta_data["eventrepid"]
+    print(slices.keys())
+    if mergekeyflag == True:
+        keys = mergekeys.keys()
+        delkeys = []
+        for i in keys:
+            print(i)
+            a = slices[str(mergekeys[i][0])]
+            b = slices[str(mergekeys[i][1])]
+            ab = np.union1d(a, b)
+            slices[i] = ab
+            delkeys.append(str(mergekeys[i][0]))
+            delkeys.append(str(mergekeys[i][1]))
+
+        list(map(slices.pop, delkeys))
 
     for label, (start, end) in slices.items():
         data = mat_data[:, :, start:end]
@@ -589,7 +610,7 @@ def postprocessFPVSdata(event_label, folderpath):
     }
 
     matfilepath = folderpath / f"{event_label} MERGED.npy"
-    metafilepath = folderpath / f"{event_label} MERGED mdata.npy"
+    metafilepath = folderpath / f"{event_label} MERGED .pkl"
     np.save(matfilepath, mat_data)
     cf.saveMetadata(meta_data,metafilepath)
 
@@ -597,7 +618,7 @@ def postprocessFPVSdata(event_label, folderpath):
     print("data is merged based on epochs, saved as: ",matfilepath)
     print("\n")
 
-    fs  = cf.assign(meta_data["fs"])
+    fs  = meta_data["fs"]
     freq_min = 0
     freq_max = 50
     meta_data["freq_range"] = [freq_min, freq_max]
@@ -701,7 +722,7 @@ def postprocessFPVSdata(event_label, folderpath):
     blmatfilepath = matfilepath.with_name("13_baseline " + matfilepath.stem)
     np.save(blmatfilepath, bl_data)
     blmetadatafilepath = metafilepath.with_name("13_baseline " + metafilepath.stem)
-    np.save(blmetadatafilepath, meta_data_bl)
+    cf.saveMetadata(blmetadatafilepath, meta_data_bl)
 
     print("baseline data saved, size of the data in ",blmatfilepath)
     print("\n")
@@ -709,7 +730,7 @@ def postprocessFPVSdata(event_label, folderpath):
     oddmatfilepath = matfilepath.with_name("13_oddball " + matfilepath.stem)
     np.save(oddmatfilepath, odd_data)
     oddmetafilepath = metafilepath.with_name("13_oddball " + metafilepath.stem)
-    np.save(oddmetafilepath, meta_data_odd)
+    cf.saveMetadata(oddmetafilepath, meta_data_odd)
     print("oddball data saved, size of the data in ",oddmatfilepath)
     print("\n")
 

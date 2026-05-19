@@ -106,16 +106,23 @@ def assign(data):
     # Leave clean data types (strings, ints, floats, paths) untouched
     return data
 
-def openMetadata(filepath):
+def loadMetadata(filepath):
     import pickle
+    if filepath.suffix !='.pkl':
+        filepath=filepath.with_suffix('.pkl')
+
     with open(filepath, "rb") as f:
         meta_data = pickle.load(f)
     return meta_data
 
-def saveMetadata(meta_data, metafilepath):
+def saveMetadata(data, filepath):
     import pickle
-    with open(metafilepath, "wb") as f:
-        pickle.dump(meta_data, f)
+
+    if filepath.suffix != '.pkl':
+        filepath = filepath.with_suffix('.pkl')
+
+    with open(filepath, "wb") as f:
+        pickle.dump(data, f)
 
 def updatemetadataHistory(meta_data,step_prefix):
     if step_prefix is None:
@@ -150,7 +157,9 @@ def showmeFFT(signal,fs,freqlim=None,pltsize=None,label=None,titlestr=None,epoch
 
     #actual plotting
     plt.figure(figsize=pltsize)
-    plt.stem(freqs[idx], FFT_vals[idx],lw=1)
+    markerline, stemlines, baseline = plt.stem(freqs[idx], FFT_vals[idx])
+    markerline.set_markersize(1)
+    plt.setp(stemlines, linewidth= 1)
     plt.title(titlestr)
     plt.xlabel("Freq [Hz]")
     ticks = np.arange(1.2*(freqlim[0]//1.2), freqlim[1] + 1.2, 1.2)  # include endpoint
@@ -257,7 +266,8 @@ def showmeSummaryPlot(signal,fs,chname,subjid,pltsize=None,freqlim=None,epochid=
     showmeSignal(signal,titlestr=sigtitlestr,epochid=epochid,pltsize=pltsize)
     showmeFFT(signal,fs,freqlim=freqlim,pltsize=pltsize,titlestr=ffttitlestr,epochid=epochid)
 
-def zscoreChunks(FFT, freqs, f0=None, window=None, exclude_bins=1, buffer=None): #funciton under construction
+def zscoreChunks(FFT, freqs, f0=None, window=None, exclude_bins=1, buffer=None):
+    #funciton under construction
     import numpy as np
 
     if f0 is None:
@@ -351,7 +361,7 @@ def showmeSignalUI(mat_data,lw6_data,xlim=None,ylim=None):
             if xlim is not None:
                 plt.xlim(-abs(xlim), abs(xlim))
             if ylim is not None:
-                plt.ylim(-abs(ylim),abs(ylim))
+                plt.ylim(ylim[0],ylim[1])
 
         plt.show()
 
@@ -802,7 +812,7 @@ def showme2DTopomap(activations, lw6_data, titlestr="2D EEG Topomap"):
     plt.colorbar(im, ax=ax, shrink=0.7)
     plt.show()
 
-def showmeICAoverlayedondata(mat_data, ica_data ,labels, chid = None):
+def showmeICAoverlayedondata(mat_data, ica_data ,labels, chid = None, subjid = None):
     import ipywidgets as widgets
     from IPython.display import display
     import matplotlib.pyplot as plt
@@ -831,8 +841,10 @@ def showmeICAoverlayedondata(mat_data, ica_data ,labels, chid = None):
         # Plot
         plt.plot(signal_norm, label=f"EEG Channel {chname}", color='blue')
         plt.plot(ICA_norm, label=f"ICA Component {ICA_id}", color='red', alpha=0.7)
-
-        plt.title(f"ICA {ICA_id} vs Channel {chname}")
+        if subjid != None:
+            plt.title(f"ICA {ICA_id} vs Channel {chname} for {subjid}")
+        else:
+            plt.title(f"ICA {ICA_id} vs Channel {chname} for {subjid}")
         plt.xlabel("Time")
         plt.ylabel("Normalized Amplitude")
         legendstr = [f"ICA component {ICA_id}"]
@@ -859,104 +871,42 @@ def showmeICAoverlayedondata(mat_data, ica_data ,labels, chid = None):
 
     display(widgets.VBox([ICA_slider, out]))
 
-def showmeICAoverlayedondataWithreturn(mat_data, ica_data, ch_id = None):
-    import ipywidgets as widgets
-    from IPython.display import display, clear_output
-    import matplotlib.pyplot as plt
-    import numpy as np
-
-    if ch_id == None:
-        ch_id = 0
-
-    # 1. Setup Data
-
-    signal = mat_data[ch_id, :]
-
-    def normalize(x): return (x - np.mean(x)) / np.std(x)
-
-    signal_norm = normalize(signal)
-
-    # This list will hold the ICA IDs you decide to remove
-    ids_to_remove = []
-
-    # 2. Define UI Elements
-    ICA_slider = widgets.IntSlider(
-        value=0, min=0, max=ica_data.shape[0] - 1,
-        description='ICA Comp:', layout={'width': '500px'}
-    )
-
-    add_btn = widgets.Button(description="Add to Removal List", button_style='warning')
-    done_btn = widgets.Button(description="Finalize & Stop", button_style='success')
-    status_label = widgets.Label(value="Selected IDs: []")
-
-    # 3. Plotting Logic
-    def overlay_data(ICA_id):
-        plt.figure(figsize=(10, 4))
-        ICA_signal = ica_data[ICA_id, :]
-        ICA_norm = normalize(ICA_signal)
-
-        plt.plot(signal_norm, label=f"EEG Channel {ch_id}", color='blue', alpha=0.5)
-        plt.plot(ICA_norm, label=f"ICA Component {ICA_id}", color='red')
-        plt.title(f"Comparing ICA {ICA_id} to Channel {ch_id}")
-        plt.legend()
-        plt.show()
-
-    out = widgets.interactive_output(overlay_data, {'ICA_id': ICA_slider})
-
-    # 4. Button Logic
-    def on_add_clicked(b):
-        current_id = ICA_slider.value
-        if current_id not in ids_to_remove:
-            ids_to_remove.append(current_id)
-            status_label.value = f"Selected IDs: {sorted(ids_to_remove)}"
-
-    def on_done_clicked(b):
-        # Stop displaying the plot and UI
-        ui_container.close()
-        out.close()
-        print(f"Final List of ICA components to remove: {sorted(ids_to_remove)}")
-        # You can now use 'ids_to_remove' for the next step of your analysis
-
-    add_btn.on_click(on_add_clicked)
-    done_btn.on_click(on_done_clicked)
-
-    # 5. Display
-    ui_container = widgets.VBox([
-        ICA_slider,
-        widgets.HBox([add_btn, done_btn]),
-        status_label
-    ])
-    display(ui_container, out)
-
-    # Note: In Jupyter, this function returns immediately.
-    # The 'ids_to_remove' list will be populated as you click.
-    return ids_to_remove
-
-def showmeSTFTSpectrogram(mat_data, chid, fs = 256 , titlestr = None):
+def showmeSTFTSpectrogram(mat_data, chid, fs = 256 , titlestr = None,freqlim = None, binsize = None,isoverlap = None):
     # create a spectrogram of the channel activations for all time.
     # input the mat_data and channel id, function assumes sampling frequency is 256 Hz
 
     # 256 sample STFT with
     import scipy.signal as signal
     import matplotlib.pyplot as plt
-    import ipywidgets as widgets
     import numpy as np
-    # %matplotlib widgets #keeping the plot
     if titlestr == None:
         titlestr = f' STFT Spectrogram for channel {chid}'
 
-    chsignal = mat_data[ :, chid]
-    f, t, Sxx = signal.spectrogram(chsignal, fs)
+    if isoverlap == None:
+        isoverlap = False
 
+    if freqlim == None:
+        freqlim = [0,50]
+
+    if binsize == None:
+        binsize = 512
+
+    chsignal = mat_data[ :, chid]
+    if isoverlap:
+        f, t, Sxx = signal.spectrogram(chsignal, fs,nperseg=binsize,noverlap=binsize/2)
+    else:
+        f, t, Sxx = signal.spectrogram(chsignal, fs,nperseg=binsize,noverlap=0)
+
+    freqidx = np.where((f>=freqlim[0]) & (f<=freqlim[1]))[0]
     plt.figure(figsize=(10, 5))
-    plt.pcolormesh(t, f, 10 * np.log10(Sxx), shading='gouraud' , cmap='RdBu_r')
+    plt.pcolormesh(t, f[freqidx], 10 * np.log10(Sxx[freqidx,:]), shading='gouraud' , cmap='RdBu_r')
     plt.ylabel('Frequency [Hz]')
     plt.xlabel('Time [nsamples]')
     plt.title(titlestr)
     plt.colorbar(label='Power[dB]')
     plt.show()
 
-def showmeMWSpectrogram(mat_data, chid, epochid , fs = 256 , titlestr = None, freqlim = None):
+def showmeMWSpectrogram(mat_data, chid, epochid , fs = 256 , titlestr = None, freqlim = None, binsize = None,isoverlap = None):
     import numpy as np
     import matplotlib.pyplot as plt
     import mne
@@ -965,6 +915,9 @@ def showmeMWSpectrogram(mat_data, chid, epochid , fs = 256 , titlestr = None, fr
         freqlim = [0,50]
     if titlestr == None:
         titlestr = f' MW Spectrogram for channel {chid}'
+    if len(mat_data.shape) == 2:
+        epochid = 0
+
     signal = np.moveaxis(mat_data, 0, -1)
     signalOI = signal[chid, epochid, :]
     freqs = np.linspace(1, 60, 100)
@@ -979,9 +932,7 @@ def showmeMWSpectrogram(mat_data, chid, epochid , fs = 256 , titlestr = None, fr
         n_cycles=n_cycles,
         output='power'
     )
-
     power = power[0, 0]  # remove extra dims
-
     # Time axis
     times = np.arange(signalOI.shape[0]) / fs
 
@@ -991,47 +942,41 @@ def showmeMWSpectrogram(mat_data, chid, epochid , fs = 256 , titlestr = None, fr
                    shading='gouraud', cmap='RdBu_r')
     plt.xlabel("Time (s)")
     plt.ylabel("Frequency (Hz)")
-    plt.title("Morlet Wavelet Spectrogram")
+    if titlestr == None:
+        plt.title("Morlet Wavelet Spectrogram")
+    else:
+        plt.title(titlestr)
+
     plt.colorbar(label="Power (dB)")
     plt.ylim(1, 50)
     plt.show()
 
-def createSkullmesh():
-    import open3d as o3d
-    import mcubes
-    import nrrd
-    import numpy as np
+# def createSkullmesh():
+#     import open3d as o3d
+#     import mcubes
+#     import nrrd
+#     import numpy as np
+#
+#     # 1. Load your CT scan (.nrrd file)
+#     data, header = nrrd.read('skull.nrrd')
+#
+#     # 2. Thresholding (Isolate bone)
+#     # Bone density is typically between 200-1000+ HU
+#     binary_mask = data > 300
+#
+#     # 3. Running Marching Cubes to extract mesh
+#     vertices, faces = mcubes.marching_cubes(binary_mask, 0)
+#
+#     # 4. Create and save mesh
+#     mesh = o3d.geometry.TriangleMesh()
+#     mesh.vertices = o3d.utility.Vector3dVector(vertices)
+#     mesh.triangles = o3d.utility.Vector3iVector(faces)
+#
+#     # Clean up the mesh
+#     mesh.remove_duplicated_vertices()
+#     mesh.remove_degenerate_triangles()
+#
+#     o3d.io.write_triangle_mesh('skull_mesh.stl', mesh)
+#     print("Mesh saved!")
+#     return(mesh)
 
-    # 1. Load your CT scan (.nrrd file)
-    data, header = nrrd.read('skull.nrrd')
-
-    # 2. Thresholding (Isolate bone)
-    # Bone density is typically between 200-1000+ HU
-    binary_mask = data > 300
-
-    # 3. Running Marching Cubes to extract mesh
-    vertices, faces = mcubes.marching_cubes(binary_mask, 0)
-
-    # 4. Create and save mesh
-    mesh = o3d.geometry.TriangleMesh()
-    mesh.vertices = o3d.utility.Vector3dVector(vertices)
-    mesh.triangles = o3d.utility.Vector3iVector(faces)
-
-    # Clean up the mesh
-    mesh.remove_duplicated_vertices()
-    mesh.remove_degenerate_triangles()
-
-    o3d.io.write_triangle_mesh('skull_mesh.stl', mesh)
-    print("Mesh saved!")
-    return(mesh)
-
-def loadData(filepath):
-    from pathlib import Path, PurePath
-    import numpy as np
-
-    if not isinstance(filepath, PurePath):
-        filepath = Path(filepath)
-
-    matfilepath = filepath.with_suffix('.mat')
-    lw6filepath = filepath.with_suffix('.lw6')
-    mat_data = np.load(filepath)
