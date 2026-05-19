@@ -476,14 +476,14 @@ def preprocesssFPVSdata_segmentation(matfilepath, metafilepath):
 
     return mat_data, meta_data, metafilepath
 
-def preprocessFPVSdata_phase2(matfilepath, metafilepath,interp_chnames = None, bad_but_ignore = None, mergekeyflag = None ):
+def preprocessFPVSdata_phase2(matfilepath, metafilepath,interp_chnames = None, bad_but_ignore = None, mergekeyflag = None , mergekeys = None):
     import numpy as np
     import importlib
     import cust_funcs as cf
     importlib.reload(cf)
     if mergekeyflag == None:
         mergekeyflag = True
-        
+
     mat_data = np.load(matfilepath)
     meta_data = cf.loadMetadata(metafilepath)
     labels = (meta_data["chanlocs"]["labels"])
@@ -534,17 +534,19 @@ def preprocessFPVSdata_phase2(matfilepath, metafilepath,interp_chnames = None, b
 
     ## Segmentation
     subjid = metafilepath.stem.split()[-1]
-    if len(subjid) != 8:  # Prevents taking 'lw6' as the subject id as we know that subject id is usually 8 characters long
+    if len(subjid) != 8:  # Prevents mistaking something else as the subject id as we know that subject id is usually 8 characters long
         subjid = metafilepath.stem.split()[-2]
     print(len(subjid))
 
     # default value is that some events need to be merged. if this is set to 0 then no event is merged
-    mergekeys = {
-        "TOP": [210, 212],
-        "BOTTOM": [214, 216],
-        "RIGHT": [218, 220],
-        "LEFT": [222, 224]
-    }
+    if mergekeys == None:
+        mergekeys = {
+            "TOP": [210, 212],
+            "BOTTOM": [214, 216],
+            "RIGHT": [218, 220],
+            "LEFT": [222, 224]
+        }
+
 
     slices = meta_data["eventrepid"]
     print(slices.keys())
