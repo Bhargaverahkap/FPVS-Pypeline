@@ -57,8 +57,6 @@ def preprocessFPVSdata_phase1(matfilepath = None, metafilepath = None, configfil
 
     matfilepath = matfilepath.with_name("1_chanlabels " + matfilepath.stem)
     cf.saveMetadata(meta_data,metafilepath)
-
-
     np.save(matfilepath, mat_data)
     print("channels are renamed and saved in and as: ", metafilepath)
     print("\n")
@@ -127,8 +125,8 @@ def preprocessFPVSdata_phase1(matfilepath = None, metafilepath = None, configfil
         "chanlocs.sph_theta": "theta angle of channel",
         "chanlocs.sph_phi_besa": "phi angle of channel mapped onto the brain",
         "chanlocs.sph_theta_besa": "theta angle of channel mapped onto the brain",
-
     })
+
     meta_data = cf.updatemetadataHistory(meta_data,"2_chanlocs")
     metafilepath = metafilepath.with_name("2_chanlocs " + metafilepath.stem)
 
@@ -167,16 +165,22 @@ def preprocessFPVSdata_phase1(matfilepath = None, metafilepath = None, configfil
     print("Data is downsampled! by a factor of ",dsfact ," and saved as ", metafilepath)
     print("\n")
 
-    #4. delete exg and status channels:
+    #4. delete exg and status channels, except exg 7 and 8:
     labels = meta_data["chanlocs"]["labels"]
     exgindices = np.where(np.char.find(np.char.lower(labels), 'ex') != -1)[0]
     statindice = np.where(np.char.find(np.char.lower(labels), 'status') != -1)[0]
 
-    todeletechid = np.union1d(exgindices, statindice)
-    todeletechid = todeletechid.astype(int)
+    noincludeexgindices7 = np.where(np.char.find(np.char.lower(labels), 'exg7') != -1)[0]
+    noincludeexgindices8 = np.where(np.char.find(np.char.lower(labels), 'exg8') != -1)[0]
+    noincludeind = np.concatenate((noincludeexgindices7, noincludeexgindices8), axis=0)
+    noincludech = [meta_data["chanlocs"]["labels"][i] for i in noincludeind]
 
+    todeletechid = np.union1d(exgindices, statindice)
+    todeletechid = np.setdiff1d(todeletechid, noincludeind)
+    todeletechid = todeletechid.astype(int)
     mask = np.ones(len(labels), dtype=bool)
     mask[todeletechid] = False
+
 
     # deleting data
     mat_data = mat_data[:, mask]
@@ -582,26 +586,33 @@ def postprocessFPVSdata(event_label, folderpath):
     import cust_funcs as cf
     importlib.reload(cf)
 
-    print(f" the event you're running this script for is {event_label}")
+    print(f"The event you're running this script for is {event_label}")
 
-    files = sorted(folderpath.glob(f"{event_label}*.npy"))
-    print(*files, sep='\n')
+    files = sorted([f for f in folderpath.glob(f"{event_label}*.npy")
+                    if not f.stem.endswith("merged") and not f.name.startswith(f"{event_label}_")
+                    ])
+    #Excludes the merged files and preexisting files that have event_label_ (e.g. "10_")
+    #in front of them
+    # print(*files, sep='\n')
     files = files[:]
     print("\n")
+    # print(files)
     data_list = []
     subj_merged = []
     for file in files:
         strings = file.stem
+        print(strings)
         strings = strings.split(" ")
         subjid = strings[-1]
         if len(subjid) != 8:  # Prevents taking 'lw6' as the subject id as we know that subject id is usually 8 characters long
             continue
         data = np.load(file)  # loads array saved earlier
+        print(data.shape)
         data_list.append(data)
         subj_merged.append(subjid)
 
     mat_data = np.concatenate(data_list, axis=2)
-
+    print(mat_data.shape)
     meta_data = {
         "event_label": event_label,
         "subjids": subj_merged,
@@ -657,7 +668,8 @@ def postprocessFPVSdata(event_label, folderpath):
     np.save(matfilepath, mat_data)
 
     meta_data = cf.updatemetadataHistory(meta_data,"11_avg")
-    metafilepath = metafilepath.with_name(matfilepath)
+    metafilepath = metafilepath.with_name("11_avg " + metafilepath.stem)
+    metafilepath = metafilepath.with_suffix(".pkl")
 
     cf.saveMetadata(meta_data,metafilepath)
 
@@ -724,7 +736,7 @@ def postprocessFPVSdata(event_label, folderpath):
     blmatfilepath = matfilepath.with_name("13_baseline " + matfilepath.stem)
     np.save(blmatfilepath, bl_data)
     blmetadatafilepath = metafilepath.with_name("13_baseline " + metafilepath.stem)
-    cf.saveMetadata(blmetadatafilepath, meta_data_bl)
+    cf.saveMetadata(meta_data_bl,blmetadatafilepath)
 
     print("baseline data saved, size of the data in ",blmatfilepath)
     print("\n")
@@ -732,7 +744,7 @@ def postprocessFPVSdata(event_label, folderpath):
     oddmatfilepath = matfilepath.with_name("13_oddball " + matfilepath.stem)
     np.save(oddmatfilepath, odd_data)
     oddmetafilepath = metafilepath.with_name("13_oddball " + metafilepath.stem)
-    cf.saveMetadata(oddmetafilepath, meta_data_odd)
+    cf.saveMetadata(meta_data_odd,oddmetafilepath)
     print("oddball data saved, size of the data in ",oddmatfilepath)
     print("\n")
 
@@ -743,17 +755,17 @@ def postprocessFPVSdata(event_label, folderpath):
     blmatfilepath = blmatfilepath.with_name("14_sum " + blmatfilepath.stem)
     meta_data_bl = cf.updatemetadataHistory(meta_data_bl,"14_sum")
     blmetadatafilepath = blmetadatafilepath.with_name("14_sum " + blmetadatafilepath.stem)
-    np.save(blmetadatafilepath, meta_data_bl)
+    cf.saveMetadata(meta_data_bl,blmetadatafilepath)
     np.save(blmatfilepath, bl_data)
-    print("Harmonics of bl_data is added and the new shape is:", bl_data.shape)
+    print("Harmonics of bl_data is summed and the new shape is:", bl_data.shape)
     print("\n")
 
     oddmatfilepath = oddmatfilepath.with_name("14_sum " + oddmatfilepath.stem)
     oddmetafilepath = oddmetafilepath.with_name("14_sum " + oddmetafilepath.stem)
     np.save(oddmatfilepath, odd_data)
     meta_data_odd = cf.updatemetadataHistory(meta_data_odd, "14_sum")
-    np.save(oddmetafilepath, meta_data_odd)
-    print("Harmonics of odd_data is added and the new shape is:", odd_data.shape)
+    cf.saveMetadata(meta_data_odd,oddmetafilepath)
+    print("Harmonics of odd_data is summed and the new shape is:", odd_data.shape)
     print("\n")
     #Technically the pipeline is incomplete needs to be completed
 

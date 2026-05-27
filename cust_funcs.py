@@ -673,15 +673,13 @@ def showme3DTopomap(activations,lw6_data, title="3D EEG Topography"):
     z_p = (z_p - elec_center[2]) * marker_scaling + elec_center[2]
     shift = skull_center - elec_center
     # print(shift)
-    # x_p += shift[0]
-    # x_p *= -1
-    # x_p -= shift[0]
+    # y_p *= -1
 
     # 3. Interpolation
     # Map the 68 activation points to the thousands of vertices on the head mesh
     # 'smooth' helps prevent "spiky" look if one channel is noisy
     rbf_func = Rbf(
-        x_p, y_p, z_p,
+        x_p, -1*y_p, z_p,
         activations,
         function='multiquadric',
         smooth=0.02
@@ -689,8 +687,9 @@ def showme3DTopomap(activations,lw6_data, title="3D EEG Topography"):
 
     # Shifting/scaling the chan markers to align with the skull
     # Change these values when if you are changing the 'skull.obj' file
-    y_p += -.385
+    # x_p *= -1
     y_p *= -1
+    y_p += .385
     z_p += .3
 
     #interpolating values
@@ -746,7 +745,6 @@ def showme3DTopomap(activations,lw6_data, title="3D EEG Topography"):
         # width = 700,  # pixels
         height = 500  # pixels
     )
-
     return fig
 
 def showme2DTopomap(activations, lw6_data, titlestr="2D EEG Topomap"):
@@ -951,32 +949,32 @@ def showmeMWSpectrogram(mat_data, chid, epochid , fs = 256 , titlestr = None, fr
     plt.ylim(1, 50)
     plt.show()
 
-# def createSkullmesh():
-#     import open3d as o3d
-#     import mcubes
-#     import nrrd
-#     import numpy as np
-#
-#     # 1. Load your CT scan (.nrrd file)
-#     data, header = nrrd.read('skull.nrrd')
-#
-#     # 2. Thresholding (Isolate bone)
-#     # Bone density is typically between 200-1000+ HU
-#     binary_mask = data > 300
-#
-#     # 3. Running Marching Cubes to extract mesh
-#     vertices, faces = mcubes.marching_cubes(binary_mask, 0)
-#
-#     # 4. Create and save mesh
-#     mesh = o3d.geometry.TriangleMesh()
-#     mesh.vertices = o3d.utility.Vector3dVector(vertices)
-#     mesh.triangles = o3d.utility.Vector3iVector(faces)
-#
-#     # Clean up the mesh
-#     mesh.remove_duplicated_vertices()
-#     mesh.remove_degenerate_triangles()
-#
-#     o3d.io.write_triangle_mesh('skull_mesh.stl', mesh)
-#     print("Mesh saved!")
-#     return(mesh)
+def createSkullmesh():
+    import open3d as o3d
+    import mcubes
+    import nrrd
+    import numpy as np
+
+    # 1. Load your CT scan (.nrrd file)
+    data, header = nrrd.read('skull.nrrd')
+
+    # 2. Thresholding (Isolate bone)
+    # Bone density is typically between 200-1000+ HU
+    binary_mask = data > 300
+
+    # 3. Running Marching Cubes to extract mesh
+    vertices, faces = mcubes.marching_cubes(binary_mask, 0)
+
+    # 4. Create and save mesh
+    mesh = o3d.geometry.TriangleMesh()
+    mesh.vertices = o3d.utility.Vector3dVector(vertices)
+    mesh.triangles = o3d.utility.Vector3iVector(faces)
+
+    # Clean up the mesh
+    mesh.remove_duplicated_vertices()
+    mesh.remove_degenerate_triangles()
+
+    o3d.io.write_triangle_mesh('skull_mesh.stl', mesh)
+    print("Mesh saved!")
+    return(mesh)
 
