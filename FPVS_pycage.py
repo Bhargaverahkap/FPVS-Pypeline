@@ -341,8 +341,6 @@ def preprocessFPVSdata_applyICA(matfilepath, metafilepath, ica, raw, rmidx):
     mat_data = raw_clean.get_data()
     meta_data = cf.loadMetadata(metafilepath)
 
-
-
     meta_data["ICA"] = rmidx
     meta_data["shape"] = mat_data.shape
     meta_data["size"] = mat_data.size

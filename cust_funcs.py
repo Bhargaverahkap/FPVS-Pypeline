@@ -1,9 +1,9 @@
 # Hello Bhargav, welcome to your sandbox
 def rebrand_lw6data(filepath):
-    """ Rewrite the lw6_data from matlab style encryption to python style encryption to make life easier in python
+    """ Rewrite the meta_data from matlab style encryption to python style encryption to make life easier in python
 
     :param filepath: enter the full filepath starting from the drive it is stored in.
-    :return: The newly created lw6_data, with the name meta_data
+    :return: The newly created meta_data, with the name meta_data
     """
     import numpy as np
     import scipy.io as sci
@@ -35,21 +35,21 @@ def rebrand_lw6data(filepath):
 
     fields = {
         "filetype": "Type of file this is stored as",
-        "name": "Name of the file as stored in the lw6_data",
-        "tags": "I have no idea, but this is as it is stored in the lw6_data",
+        "name": "Name of the file as stored in the meta_data",
+        "tags": "I have no idea, but this is as it is stored in the meta_data",
         "history": "Record of all changes made to the data as operation stored as suffix: history till then",
         "origins": "Origins of the data, contains gui info and original filepath",
         "datasize": "size of the data",
-        "xstart": "I have no idea what this is, but this was present in the original lw6_data",
-        "ystart": "I have no idea what this is, but this was present in the original lw6_data",
-        "zstart": "I have no idea what this is, but this was present in the original lw6_data",
-        "xstep": "I have no idea what this is, but this was present in the original lw6_data",
-        "ystep": "I have no idea what this is, but this was present in the original lw6_data",
-        "zstep": "I have no idea what this is, but this was present in the original lw6_data",
+        "xstart": "I have no idea what this is, but this was present in the original meta_data",
+        "ystart": "I have no idea what this is, but this was present in the original meta_data",
+        "zstart": "I have no idea what this is, but this was present in the original meta_data",
+        "xstep": "I have no idea what this is, but this was present in the original meta_data",
+        "ystep": "I have no idea what this is, but this was present in the original meta_data",
+        "zstep": "I have no idea what this is, but this was present in the original meta_data",
         "chanlocs": "channel location data, stored as follows",
         "chanlocs.labels": "Channel labels stored as strings",
-        "chanlocs.SEEG_enabled": "I have no idea what this is, but was present in the original lw6_data",
-        "chanlocs.TOPO_enabled": "I have no idea what this is, but was present in the original lw6_data",
+        "chanlocs.SEEG_enabled": "I have no idea what this is, but was present in the original meta_data",
+        "chanlocs.TOPO_enabled": "I have no idea what this is, but was present in the original meta_data",
         "events": "event data as stored as follows",
         "events.code": "event code as described in the triggers document",
         "events.latency": "time delay of current trigger from start of experiment",
@@ -299,9 +299,9 @@ def zscoreChunks(FFT, freqs, f0=None, window=None, exclude_bins=1, buffer=None):
     z = (np.mean(signal) - noise_mean) / noise_std
     return z
 
-def givemeNNearestNeighbour(lw6_data,chnameid):
+def givemeNNearestNeighbour(meta_data,chnameid):
     import numpy as np
-    labels=lw6_data["chanlocs"]["labels"]
+    labels=meta_data["chanlocs"]["labels"]
     labels = labels.astype(str)
     if isinstance(chnameid, str):
         chid = np.squeeze(np.where(chnameid==labels))
@@ -309,11 +309,11 @@ def givemeNNearestNeighbour(lw6_data,chnameid):
         chid=chnameid
 
     #shaping the data
-    X=lw6_data["chanlocs"]["X"]
+    X=meta_data["chanlocs"]["X"]
     X=X.astype(float)
-    Y=lw6_data["chanlocs"]["Y"]
+    Y=meta_data["chanlocs"]["Y"]
     Y=Y.astype(float)
-    Z=lw6_data["chanlocs"]["Z"]
+    Z=meta_data["chanlocs"]["Z"]
     Z=Z.astype(float)
     coords = np.column_stack((X, Y, Z))
 
@@ -327,14 +327,14 @@ def givemeNNearestNeighbour(lw6_data,chnameid):
 
     return sorted_idx[1:],sorted_labels[1:]
 
-def showmeSignalUI(mat_data,lw6_data,xlim=None,ylim=None):
+def showmeSignalUI(mat_data,meta_data,xlim=None,ylim=None):
     import ipywidgets as widgets
     from IPython.display import display
     import matplotlib.pyplot as plt
     import numpy as np
 
     epoch = [f"epoch{i}" for i in range(mat_data.shape[2])]
-    labels = np.squeeze(lw6_data["chanlocs"]["labels"])
+    labels = np.squeeze(meta_data["chanlocs"]["labels"])
     labels = labels.astype(str)
 
     # 1. Generate Dummy Data (40 Epochs, 60 Series, 100 Timepoints)
@@ -397,13 +397,13 @@ def showmeSignalUI(mat_data,lw6_data,xlim=None,ylim=None):
 
     display(ui)
 
-def showmeSignalUIandInterp(mat_data, lw6_data, xlim=None, ylim=None):
+def showmeSignalUIandInterp(mat_data, meta_data, xlim=None, ylim=None):
     import ipywidgets as widgets
     from IPython.display import display
     import matplotlib.pyplot as plt
     import numpy as np
     # Setup data and labels
-    labels = np.squeeze(lw6_data["chanlocs"]["labels"]).astype(str)
+    labels = np.squeeze(meta_data["chanlocs"]["labels"]).astype(str)
     data_matrix = np.moveaxis(mat_data, 0, -1)
 
     # Storage for different categories of bad channels
@@ -504,7 +504,7 @@ def showmeSignalUIandInterp(mat_data, lw6_data, xlim=None, ylim=None):
     # Returning both lists so you can handle them differently in your pipeline
     badch = np.union1d(to_interpolate, bad_but_ignore)
     for i in range(len(to_interpolate)):
-        srt_idx,srt_labels = givemeNNearestNeighbour(lw6_data, to_interpolate[i])
+        srt_idx,srt_labels = givemeNNearestNeighbour(meta_data, to_interpolate[i])
         srtd_idx = np.where(~np.isin(srt_labels, badch))[0]
         srtd_idx = srtd_idx[:3]
         badch = np.append(badch, srt_labels[srtd_idx])
@@ -531,7 +531,7 @@ def givemeUniqueTuples(data,tolerance = None):
 
     return sorted(unique_pairs)
 
-def showmeTopomap(data,lw6_data):
+def showmeTopomap(data,meta_data):
 
     import mne
     import plotly.graph_objects as go
@@ -561,9 +561,9 @@ def showmeTopomap(data,lw6_data):
 
     # 2. YOUR DATA (68 Channels)
     # Ensure x_elec, y_elec, z_elec are in meters
-    x_elec = lw6_data["chanlocs"]["X"].astype(float)
-    y_elec = lw6_data["chanlocs"]["Y"].astype(float)
-    z_elec = lw6_data["chanlocs"]["Z"].astype(float)
+    x_elec = meta_data["chanlocs"]["X"].astype(float)
+    y_elec = meta_data["chanlocs"]["Y"].astype(float)
+    z_elec = meta_data["chanlocs"]["Z"].astype(float)
     activations = data
     # 3. INTERPOLATE ACTIVATIONS ONTO THE FSAVERAGE MESH
     # We train the RBF on your 68 electrode points
@@ -608,7 +608,7 @@ def showmeTopomap(data,lw6_data):
 
     fig.show()
 
-def showme3DTopomap(activations,lw6_data, title="3D EEG Topography"):
+def showme3DTopomap(activations,meta_data, title="3D EEG Topography"):
     """
     Plots an interactive 3D topographical map on the fsaverage head model.
 
@@ -620,16 +620,16 @@ def showme3DTopomap(activations,lw6_data, title="3D EEG Topography"):
     import trimesh
     import plotly.graph_objects as go
     from scipy.interpolate import Rbf
-    import os
-    from scipy.spatial import cKDTree
 
-    x_elec = lw6_data["chanlocs"]["X"].astype(float)
-    y_elec = lw6_data["chanlocs"]["Y"].astype(float)
-    z_elec = lw6_data["chanlocs"]["Z"].astype(float)
+    x_p = meta_data["chanlocs"]["X"].astype(float)
+    y_p = meta_data["chanlocs"]["Y"].astype(float)
+    z_p = meta_data["chanlocs"]["Z"].astype(float)
 
     #1. Create skull mesh
     mesh = trimesh.load('skull.obj', force='mesh')
+    # mesh = trimesh.load("C:\\Users\Admin\Downloads\head.obj", force = 'mesh')
     vertices = mesh.vertices.copy()
+    # vertices[:,[1, 2]] = vertices[:,[2, 1]]
     faces = mesh.faces.copy()
 
 
@@ -643,12 +643,6 @@ def showme3DTopomap(activations,lw6_data, title="3D EEG Topography"):
     # elec_center = np.array([x_p.mean(), y_p.mean(), z_p.mean()])
 
     # --- Apply shift ---
-
-    # print(shift)
-    x_p = x_elec
-    y_p = y_elec
-    z_p = z_elec
-
     # Compute electrode radius
     elec_radius = np.mean(np.sqrt(x_p ** 2 + y_p ** 2 + z_p ** 2))
 
@@ -662,35 +656,26 @@ def showme3DTopomap(activations,lw6_data, title="3D EEG Topography"):
     # --- Compute shift ---
     # 2.1. Center electrode coordinates
     elec_center = np.array([
-        x_elec.mean(),
-        y_elec.mean(),
-        z_elec.mean()
+        x_p.mean(),
+        y_p.mean(),
+        z_p.mean()
     ])
-    marker_scaling = 1.72  # 80% outward
-
+    # marker_scaling = 2.02  # 80% outward
+    marker_scaling = 1.8
     x_p = (x_p - elec_center[0]) * marker_scaling + elec_center[0]
     y_p = (y_p - elec_center[1]) * marker_scaling + elec_center[1]
     z_p = (z_p - elec_center[2]) * marker_scaling + elec_center[2]
     shift = skull_center - elec_center
-    # print(shift)
-    # y_p *= -1
 
     # 3. Interpolation
     # Map the 68 activation points to the thousands of vertices on the head mesh
     # 'smooth' helps prevent "spiky" look if one channel is noisy
     rbf_func = Rbf(
-        x_p, -1*y_p, z_p,
+        -1*x_p, -1*y_p, z_p,
         activations,
         function='multiquadric',
         smooth=0.02
     )
-
-    # Shifting/scaling the chan markers to align with the skull
-    # Change these values when if you are changing the 'skull.obj' file
-    # x_p *= -1
-    y_p *= -1
-    y_p += .385
-    z_p += .3
 
     #interpolating values
     interp_values = rbf_func(
@@ -699,6 +684,19 @@ def showme3DTopomap(activations,lw6_data, title="3D EEG Topography"):
         vertices[:, 2]
     )
 
+    # Shifting/scaling the chan markers to align with the skull
+    # Change these values when if you are changing the 'skull.obj' file
+
+    #settings for the head mesh
+    # x_p *= -1
+    y_p *= -1
+    y_p += .385
+    z_p += .3
+
+
+    # Settings for the skull mesh
+    # y_p += .42
+    # z_p +=.3
     # 4. Create Plotly Figure
     fig = go.Figure()
 
@@ -747,64 +745,228 @@ def showme3DTopomap(activations,lw6_data, title="3D EEG Topography"):
     )
     return fig
 
-def showme2DTopomap(activations, lw6_data, titlestr="2D EEG Topomap"):
+def showme3DTopomapnewmesh(activations,meta_data, title="3D EEG Topography"):
+    """
+    Plots an interactive 3D topographical map on the fsaverage head model.
+
+    Parameters:
+    activations: array-like, shape (n_channels,)
+    x_elec, y_elec, z_elec: arrays, shape (n_channels,) in meters
+    """
+    import numpy as np
+    import trimesh
+    import plotly.graph_objects as go
+    from scipy.interpolate import Rbf
+
+    x_p = meta_data["chanlocs"]["X"].astype(float)
+    y_p = meta_data["chanlocs"]["Y"].astype(float)
+    z_p = meta_data["chanlocs"]["Z"].astype(float)
+
+    #1. Create skull mesh
+    mesh = trimesh.load("C:\\Users\Admin\Downloads\head_closed.obj", force = 'mesh')
+    vertices = mesh.vertices.copy()
+    vertices[:,[1, 2]] = vertices[:,[2, 1]]
+    faces = mesh.faces.copy()
+
+
+    #2. Center skull mesh
+    skull_center = vertices.mean(axis=0)
+    vertices = vertices - skull_center
+    vertices = vertices / np.max(np.linalg.norm(vertices, axis=1)) # normalizing skull scale
+    # vertices[:, 1] *= -1 #IF YOU WANT TO FLIP F/B
+    # vertices[:, 0] *= -1 #IF YOU WANT TO FLIP L/R
+    # vertices[:, 2] *= -1 #IF YOU WANT TO FLIP U/D
+    # elec_center = np.array([x_p.mean(), y_p.mean(), z_p.mean()])
+
+    # --- Apply shift ---
+    # Compute electrode radius
+    elec_radius = np.mean(np.sqrt(x_p ** 2 + y_p ** 2 + z_p ** 2))
+
+    # --- Scale electrodes to skull ---
+    skull_radius = np.mean(np.linalg.norm(vertices, axis=1))
+    scale_factor = skull_radius / elec_radius
+
+    x_p *= scale_factor
+    y_p *= scale_factor
+    z_p *= scale_factor
+    # --- Compute shift ---
+    # 2.1. Center electrode coordinates
+    elec_center = np.array([
+        x_p.mean(),
+        y_p.mean(),
+        z_p.mean()
+    ])
+    # marker_scaling = 2.02  # 80% outward
+    marker_scaling = 1.8
+    x_p = (x_p - elec_center[0]) * marker_scaling + elec_center[0]
+    y_p = (y_p - elec_center[1]) * marker_scaling + elec_center[1]
+    z_p = (z_p - elec_center[2]) * marker_scaling + elec_center[2]
+    shift = skull_center - elec_center
+
+    # 3. Interpolation
+    # Map the 68 activation points to the thousands of vertices on the head mesh
+    # 'smooth' helps prevent "spiky" look if one channel is noisy
+    rbf_func = Rbf(
+        -1*x_p, -1*y_p, z_p,
+        activations,
+        function='multiquadric',
+        smooth=0.02
+    )
+
+    #interpolating values
+    interp_values = rbf_func(
+        vertices[:, 0],
+        vertices[:, 1],
+        vertices[:, 2]
+    )
+
+    # Shifting/scaling the chan markers to align with the skull
+    # Change these values when if you are changing the 'skull.obj' file
+
+    #settings for the head mesh
+    # # x_p *= -1
+    # y_p *= -1
+    # y_p += .385
+    # z_p += .3
+
+
+    # Settings for the skull mesh
+    y_p += .42
+    z_p +=.3
+    # 4. Create Plotly Figure
+    fig = go.Figure()
+
+    # The Colored Head Mesh
+    fig.add_trace(go.Mesh3d(
+        x=vertices[:, 0], y=vertices[:, 1], z=vertices[:, 2],
+        i=faces[:, 0], j=faces[:, 1], k=faces[:, 2],
+        intensity=interp_values,
+        colorscale='Jet',
+        opacity=1.0,
+        name='Head Surface',
+        showscale=True,
+        colorbar=dict(title="Activation", thickness=20)
+    ))
+
+    # The Electrode Markers
+    fig.add_trace(go.Scatter3d(
+        x=x_p, y=y_p, z=z_p,
+        mode='markers',
+        marker=dict(size=3, color='white', line=dict(width=1, color='black')),
+        name='Electrodes'
+    ))
+
+    # Add a simple 'Nose' marker for orientation (at +Y)
+    # fig.add_trace(go.Scatter3d(
+    #     x=[0], y=[1.05], z=[0],
+    #     mode='text',
+    #     text=["FRONT"],
+    #     textfont=dict(color="black", size=10),
+    #     name='Orientation'
+    # ))
+
+    # 5. Scene Formatting
+    fig.update_layout(
+        title=title,
+        scene=dict(
+            aspectmode='data',
+            xaxis_visible=False,
+            yaxis_visible=False,
+            zaxis_visible=False,
+            camera=dict(eye=dict(x=1.2, y=1.2, z=0.5)),
+        ),
+        margin=dict(l=0, r=0, b=0, t=40),
+        # width = 700,  # pixels
+        height = 500  # pixels
+    )
+    return fig
+
+def showme2DTopomap(activations, meta_data, titlestr="2D EEG Topomap"):
     import numpy as np
     import matplotlib.pyplot as plt
     from scipy.interpolate import Rbf
 
-    if titlestr == None:
+    if titlestr is None:
         titlestr = "2D EEG Topomap"
-    # --- Load electrode positions ---
 
-    x = lw6_data["chanlocs"]["X"].astype(float)
-    y = lw6_data["chanlocs"]["Y"].astype(float)
-    z = lw6_data["chanlocs"]["Z"].astype(float)
+    # --- Load electrode positions ---
+    x = np.array(meta_data["chanlocs"]["X"], dtype=float)
+    y = np.array(meta_data["chanlocs"]["Y"], dtype=float)
+    z = np.array(meta_data["chanlocs"]["Z"], dtype=float)
+    labels = meta_data["chanlocs"]["labels"]
+
+    # Filter out external/unwanted channels
+    indices = [i for i, val in enumerate(labels) if val.upper() not in ['EXG7', 'EXG8']]
+
+    x = x[indices]
+    y = y[indices]
+    z = z[indices]
+
+    # Also filter the activations to match the channel count
+    activations = np.array(activations)[indices]
 
     # --- Normalize to unit sphere ---
-    r = np.sqrt(x**2 + y**2 + z**2)
+    r = np.sqrt(x ** 2 + y ** 2 + z ** 2)
     x = x / r
     y = y / r
 
-    # --- Match your 3D orientation (IMPORTANT) ---
-    y *= -1   # same flip you used in 3D
+    # --- Interpolation (FIXED) ---
+    # Fit the Rbf model on actual data points (x, y) and their values (activations)
+    rbf = Rbf(-1*x, y, activations, function='multiquadric', smooth=0.02)
 
-    # --- Interpolation ---
-    rbf = Rbf(x, y, activations, function='multiquadric', smooth=0.02)
-
+    # Generate grid
     grid_x, grid_y = np.mgrid[-1.3:1.3:300j, -1.3:1.3:300j]
-    # grid_x, grid_y = np.mgrid[-1:1:300j, -1:1:300j]
+
+    # Evaluate the fitted model on the grid
     grid_z = rbf(grid_x, grid_y)
 
-    # Optional: softer mask instead of hard cutoff
-    mask = grid_x ** 2 + grid_y ** 2 > 1.3 ** 2
+    # Mask everything outside the head boundary (radius = 1.0)
+    mask = (grid_x) ** 2 + (grid_y+.06) ** 2 > 1.05 ** 2
     grid_z[mask] = np.nan
 
     # --- Plot ---
-    fig, ax = plt.subplots(figsize=(5,5))
+    fig, ax = plt.subplots(figsize=(5, 5))
 
-    im = ax.contourf(grid_x, grid_y, grid_z, levels=100, cmap='jet')
+    # Draw contour on layer zorder=1
+    im = ax.contourf(grid_x, grid_y, grid_z, levels=100, cmap='jet', zorder=1)
 
-    # --- Head outline ---
-    head = plt.Circle((0,0), 1, edgecolor='black', facecolor='none', linewidth=2)
+    # --- Vector Boundary Clipping (CLEAN EDGES) ---
+    # Creates a perfect geometric circle matching your head outline (radius=1)
+    # clip_circle = plt.Circle((0, 0), 1.0, transform=ax.transData)
+    # im.set_clip_path(clip_circle)
+
+    # --- Head outline (zorder=4) ---
+    head = plt.Circle((0, 0), 1, edgecolor='black', facecolor='none', linewidth=2, zorder=4)
     ax.add_patch(head)
 
-    # --- Ears ---
-    ear_left = plt.Circle((-1.05, 0), 0.08, edgecolor='black', facecolor='none', linewidth=2)
-    ear_right = plt.Circle((1.05, 0), 0.08, edgecolor='black', facecolor='none', linewidth=2)
+    # --- Ears (zorder=4) ---
+    ear_left = plt.Circle((-1.02, 0), 0.08, edgecolor='black', facecolor='none', linewidth=2, zorder=4)
+    ear_right = plt.Circle((1.02, 0), 0.08, edgecolor='black', facecolor='none', linewidth=2, zorder=4)
     ax.add_patch(ear_left)
     ax.add_patch(ear_right)
 
-    # --- Nose ---
-    nose_x = [0 , -0.08, 0.08, 0]
-    nose_y = [1.0, 1.08, 1.08, 1.0]
-    ax.plot(nose_x, nose_y, color='black', linewidth=2)
+    # --- Nose (zorder=4) ---
+    nose_x = [0, -0.08, 0.08, 0]
+    nose_y = [1.08, 1.0, 1.0, 1.08]
+    ax.plot(nose_x, nose_y, color='black', linewidth=2, zorder=4)
 
-    # --- Electrodes ---
-    ax.scatter(x, y, c='black', s=10, zorder=3)
+    # --- Electrodes (zorder=5) ---
+    ax.scatter(x, y, c='black', s=10, zorder=5)
+
+    # --- Grid and Axis Configuration (ADDED) ---
+    # ax.grid(True, which='both', color='gray', linestyle='--', linewidth=0.5, zorder=0)
+    ax.set_axis_on()
+
+    # Grid ticks spanning across the boundary limits
+    # ax.set_xticks(np.arange(-1.2, 1.3, 0.4))
+    # ax.set_yticks(np.arange(-1.2, 1.3, 0.4))
+
+    # Clean up outer spine boxes
+    for spine in ax.spines.values():
+        spine.set_visible(False)
 
     # --- Formatting ---
     ax.set_aspect('equal')
-    ax.axis('off')
     ax.set_title(titlestr)
 
     plt.colorbar(im, ax=ax, shrink=0.7)
@@ -948,33 +1110,33 @@ def showmeMWSpectrogram(mat_data, chid, epochid , fs = 256 , titlestr = None, fr
     plt.colorbar(label="Power (dB)")
     plt.ylim(1, 50)
     plt.show()
-
-def createSkullmesh():
-    import open3d as o3d
-    import mcubes
-    import nrrd
-    import numpy as np
-
-    # 1. Load your CT scan (.nrrd file)
-    data, header = nrrd.read('skull.nrrd')
-
-    # 2. Thresholding (Isolate bone)
-    # Bone density is typically between 200-1000+ HU
-    binary_mask = data > 300
-
-    # 3. Running Marching Cubes to extract mesh
-    vertices, faces = mcubes.marching_cubes(binary_mask, 0)
-
-    # 4. Create and save mesh
-    mesh = o3d.geometry.TriangleMesh()
-    mesh.vertices = o3d.utility.Vector3dVector(vertices)
-    mesh.triangles = o3d.utility.Vector3iVector(faces)
-
-    # Clean up the mesh
-    mesh.remove_duplicated_vertices()
-    mesh.remove_degenerate_triangles()
-
-    o3d.io.write_triangle_mesh('skull_mesh.stl', mesh)
-    print("Mesh saved!")
-    return(mesh)
+#
+# def createSkullmesh():
+#     import open3d as o3d
+#     import mcubes
+#     import nrrd
+#     import numpy as np
+#
+#     # 1. Load your CT scan (.nrrd file)
+#     data, header = nrrd.read('skull.nrrd')
+#
+#     # 2. Thresholding (Isolate bone)
+#     # Bone density is typically between 200-1000+ HU
+#     binary_mask = data > 300
+#
+#     # 3. Running Marching Cubes to extract mesh
+#     vertices, faces = mcubes.marching_cubes(binary_mask, 0)
+#
+#     # 4. Create and save mesh
+#     mesh = o3d.geometry.TriangleMesh()
+#     mesh.vertices = o3d.utility.Vector3dVector(vertices)
+#     mesh.triangles = o3d.utility.Vector3iVector(faces)
+#
+#     # Clean up the mesh
+#     mesh.remove_duplicated_vertices()
+#     mesh.remove_degenerate_triangles()
+#
+#     o3d.io.write_triangle_mesh('skull_mesh.stl', mesh)
+#     print("Mesh saved!")
+#     return(mesh)
 
