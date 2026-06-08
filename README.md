@@ -3,8 +3,7 @@ FPVS Preprocessing — Letswave6 to Python
 A Python port of the EEG preprocessing pipeline used in Letswave6 for a Fast Periodic Visual Stimulation (FPVS) face-categorization task.
 
 Participants viewed a continuous stream of non-face images at a base rate of 6 Hz. Every 5th image was a face, so faces appeared periodically at 6/5 = 1.2 Hz. Because the stimulation is frequency-tagged, the face-selective response can be read directly in the frequency domain at 1.2 Hz and its harmonics, while the general visual response appears at 6 Hz and its harmonics.
-This project reimplements the Letswave6 preprocessing and analysis chain in Python so that it is scriptable, reproducible, and version-controlled.
-Pipeline
+This project reimplements the Letswave6 preprocessing and analysis chain in Python so that it is scriptable, reproducible and accessible without a Matlab license.
 
 1. Rename channels
 2. Set electrode locations (montage)
