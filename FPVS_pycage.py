@@ -549,7 +549,6 @@ def preprocessFPVSdata_phase2(matfilepath, metafilepath,interp_chnames = None, b
             "LEFT": [222, 224]
         }
 
-
     slices = meta_data["eventrepid"]
     print(slices.keys())
     if mergekeyflag == True:
@@ -609,6 +608,10 @@ def postprocessFPVSdata(event_label, folderpath):
         data_list.append(data)
         subj_merged.append(subjid)
 
+    tempfilepath = file
+    tempfilepath = tempfilepath.with_suffix(".pkl")
+    tempmeta_data = cf.loadMetadata(tempfilepath)
+
     mat_data = np.concatenate(data_list, axis=2)
     print(mat_data.shape)
     meta_data = {
@@ -616,12 +619,12 @@ def postprocessFPVSdata(event_label, folderpath):
         "subjids": subj_merged,
         "shape": mat_data.shape,
         "size": mat_data.size,
-        "fs" : 256,
-        "history" :{}
+        "fs": 256,
+        "chanlocs": tempmeta_data["chanlocs"],
+        "history": {}
     }
-
     matfilepath = folderpath / f"{event_label} MERGED.npy"
-    metafilepath = folderpath / f"{event_label} MERGED .pkl"
+    metafilepath = folderpath / f"{event_label} MERGED.pkl"
     np.save(matfilepath, mat_data)
     cf.saveMetadata(meta_data,metafilepath)
 
@@ -629,6 +632,7 @@ def postprocessFPVSdata(event_label, folderpath):
     print("data is merged based on epochs, saved as: ",matfilepath)
     print("\n")
 
+    #Frequency domain
     fs  = meta_data["fs"]
     freq_min = 0
     freq_max = 50

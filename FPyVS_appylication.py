@@ -489,7 +489,233 @@ def interpolate(filepath,stepno, interp_chnames, bad_chnames = None):
     savealldata(mat_data, meta_data, filepath)
     print("channels are interpolated and saved as ", filepath)
     print("\n")
+    return mat_data, meta_data, filepath, badch
+
+def globalreferencing(filepath,stepno, badchids= None):
+
+    mat_data, meta_data,matfilepath,metafilepath = loadalldata(filepath)
+    labels = meta_data["chanlocs"]["labels"]
+    goodchids = np.where(~np.isin(labels, badchids))[0]
+    glreference = np.mean(mat_data[:, goodchids, :], axis=1,keepdims=True)
+    mat_data = mat_data - glreference
+    meta_data["ref_chids"] = goodchids
+    extn_str = f"{stepno}_ref"
+    filepath = filepath.with_name(extn_str + filepath.stem)
+    savealldata(mat_data, meta_data, filepath)
     return mat_data, meta_data, filepath
 
-def globalreferencing(filepath,)
+def spearateepochs(filepath, mergekeys = None, mergekeyflag = None):
+    mat_data, meta_data, matfilepath,metafilepath = loadalldata(filepath)
+    subjid = metafilepath.stem.split()[-1]
+    if len(subjid) != 8:  # Prevents mistaking something else as the subject id as we know that subject id is usually 8 characters long
+        subjid = metafilepath.stem.split()[-2]
+    print(len(subjid))
+
+    # default value is that some events need to be merged. if this is set to 0 then no event is merged
+    if mergekeys == None:
+        mergekeys = {
+            "TOP": [210, 212],
+            "BOTTOM": [214, 216],
+            "RIGHT": [218, 220],
+            "LEFT": [222, 224]
+        }
+
+    slices = meta_data["eventrepid"]
+    print(slices.keys())
+    if mergekeyflag == True:
+        keys = mergekeys.keys()
+        delkeys = []
+        for i in keys:
+            print(i)
+            a = slices[str(mergekeys[i][0])]
+            b = slices[str(mergekeys[i][1])]
+            ab = np.union1d(a, b)
+            slices[i] = ab
+            delkeys.append(str(mergekeys[i][0]))
+            delkeys.append(str(mergekeys[i][1]))
+
+        list(map(slices.pop, delkeys))
+
+    for label, (start, end) in slices.items():
+        data = mat_data[:, :, start:end]
+        # print(start:end)
+        filepath = metafilepath.parent / f"{label} {subjid}.npy"
+        np.save(filepath, data)
+        # print(f"{label}: {start}:{end} for size {data.shape[2]}")
+        print(f"event {label} Saved as: {filepath}: ")
+        print("\n")
+
+    return mat_data, meta_data, filepath
+
+def mergeepochs(folderpath,event_label):
+    print(f"The event you're running this script for is {event_label}")
+
+    files = sorted([f for f in folderpath.glob(f"{event_label}*.npy")
+                    if not f.stem.endswith("merged") and not f.name.startswith(f"{event_label}_")
+                    ])
+    # Excludes the merged files and preexisting files that have event_label_ (e.g. "10_")
+    # in front of them
+
+    files = files[:]
+    print("\n")
+    # print(files)
+    data_list = []
+    subj_merged = []
+    for file in files:
+        strings = file.stem
+        print(strings)
+        strings = strings.split(" ")
+        subjid = strings[-1]
+        if len(subjid) != 8:  # Prevents taking '.pkl' as the subject id as we know that subject id is usually 8 characters long
+            continue
+        data = np.load(file)  # loads array saved earlier
+        print(data.shape)
+        data_list.append(data)
+        subj_merged.append(subjid)
+
+    tempfilepath = file
+    tempfilepath = tempfilepath.with_suffix(".pkl")
+    tempmeta_data = cf.loadMetadata(tempfilepath)
+
+    mat_data = np.concatenate(data_list, axis=2)
+    print(mat_data.shape)
+    meta_data = {
+        "event_label": event_label,
+        "subjids": subj_merged,
+        "shape": mat_data.shape,
+        "size": mat_data.size,
+        "fs": 256,
+        "chanlocs": tempmeta_data["chanlocs"],
+        "history": {}
+    }
+
+    filepath = folderpath/ f"{event_label} MERGED.npy"
+    savealldata(mat_data, meta_data,folderpath)
+    return mat_data, meta_data, filepath
+
+def frequencytransform(filepath,stepno,freqbin = None):
+    if freqbin == None:
+        freqbin = [0.05, 50]
+
+    freq_min = freqbin[0]
+    freq_max = freqbin[1]
+    stepno = stepno.astype(str)
+    extnstr = f"{stepno}_fft"
+    mat_data, meta_data, matfilepath,metafilepath = loadalldata(filepath)
+    fs = meta_data["fs"]
+    meta_data["freq_range"] = [freq_min, freq_max]
+
+    freqs = np.fft.fftfreq(mat_data.shape[0], 1 / fs)
+    idx = np.where((freqs >= freq_min) & (freqs <= freq_max))[0]
+    freq_idx = freqs[idx]
+    FFT_data = np.zeros([len(freq_idx), mat_data.shape[1], mat_data.shape[2]])
+
+    for chid in range(mat_data.shape[1]):
+        for epochid in range(mat_data.shape[2]):
+            FFT_signal = np.abs(np.fft.fft((mat_data[:, chid, epochid])))
+            FFT_data[:, chid, epochid] = FFT_signal[idx]
+
+    meta_data["freq_range"] = [freq_min, freq_max]
+    mat_data = FFT_data.copy()
+    cf.updatemetadataHistory(meta_data,extnstr)
+    filepath = filepath.with_name(extnstr + filepath.stem)
+    del FFT_data
+    savealldata(mat_data, meta_data, filepath)
+    return mat_data, meta_data, filepath
+
+def averagingacrosstrials(filepath,stepno):
+    stepno = stepno.astype(str)
+    mat_data, meta_data, matfilepath,metafilepath = loadalldata(filepath)
+    mat_data = np.mean(mat_data, axis=2)
+    extnstr = f"{stepno}_avg"
+    cf.updatemetadataHistory(meta_data,extnstr)
+    savealldata(mat_data, meta_data, filepath)
+
+def chunking(filepath,stepno,basefreq,window_width = None):
+    stepno = stepno.astype(str)
+    extnstr = f"{stepno}_chunk"
+    mat_data, meta_data, matfilepath,metafilepath = loadalldata(filepath)
+    fs = meta_data["fs"]
+    freq_min = meta_data["freq_range"][0]
+    freq_max = meta_data["freq_range"][1]
+    freq_res = (freq_max-freq_min)/fs
+    freqs = np.arange(freq_min, freq_max, freq_res)
+
+    chunkWidth = window_width + freq_res
+    meta_data["chunk_width"] = chunkWidth
+    harmonics = np.arange(basefreq, freq_max, basefreq)
+    harmonics = harmonics[harmonics <= 50]
+    chunk_data = np.zeros((int(np.floor(chunkWidth / freq_res)), mat_data.shape[1], len(harmonics)))
+    idx = np.where((freqs >= freq_min) & (freqs <= freq_max))[0]
+    freq_idx = freqs[idx]
+
+    for chid in range(mat_data.shape[1]):
+        for fhid in range(len(harmonics)):
+            idx = np.where(
+                (freq_idx > (harmonics[fhid] - chunkWidth / 2)) & (freq_idx <= (harmonics[fhid] + chunkWidth / 2)))[0]
+            # print(freq_idx[idx])
+            chunk_data[:, chid, fhid] = mat_data[idx, chid]
+
+    mat_data = chunk_data.copy()
+    filepath = filepath.with_name(extnstr + filepath.stem)
+    cf.updatemetadataHistory(meta_data,extnstr)
+    savealldata(mat_data, meta_data, filepath)
+
+    return mat_data, meta_data, filepath
+
+def selectingchunks(filepath, stepno,numharmonics = None):
+    if numharmonics == None:
+        numharmonics = 3
+
+    #So far, this selects only the first three harmonics of the baseline and oddball responses
+    stepno = stepno.astype(str)
+    mat_data, meta_data, matfilepath,metafilepath = loadalldata(filepath)
+    bl_chunks = np.arange(4, mat_data.shape[2], 5)
+    bl_chunkmask = np.zeros(mat_data.shape[2], dtype=bool)
+    bl_chunkmask[bl_chunks] = "True"
+    odd_chunkmask = ~bl_chunkmask
+
+    bl_data = mat_data[:, :, bl_chunkmask]
+    odd_data = mat_data[:, :, odd_chunkmask]
+    # Select the first 3 for baseline and 12 chunks for oddball
+    
+    bl_data = bl_data[:, :, 0:numharmonics]
+    odd_data = odd_data[:, :, 0:numharmonics]
+
+    meta_data_bl = meta_data.copy()
+    meta_data_odd = meta_data.copy()
+
+    meta_data_bl["nChunks"] = numharmonics
+    meta_data_bl["eventType"] = "Baseline"
+
+    meta_data_odd["nChunks"] = numharmonics
+    meta_data_odd["eventType"] = "Oddball"
+
+    meta_data_bl = cf.updatemetadataHistory(meta_data_bl,f"{stepno}_baseline")
+    meta_data_odd = cf.updatemetadataHistory(meta_data_odd, f"{stepno}_oddball")
+
+    filepath_br = filepath.with_name(f"{stepno}_baseline" + filepath.stem)
+    filepath_odd = filepath.with_name(f"{stepno}_oddball" + filepath.stem)
+
+    savealldata(bl_data, meta_data_bl, filepath_br)
+    savealldata(odd_data, meta_data_odd, filepath_odd)
+
+    return bl_data, meta_data_bl, odd_data, meta_data_odd, filepath_br, filepath_odd
+
+def sumofharmonics(filepath,stepno):
+    stepno = stepno.astype(str)
+    mat_data, meta_data, matfilepath,metafilepath = loadalldata(filepath)
+    mat_data = np.sum(mat_data, axis=2)
+    filepath = filepath.with_name(f"{stepno}_sum " + filepath.stem)
+    meta_data = cf.updatemetadataHistory(meta_data,f"{stepno}_sum")
+    metafilepath = metafilepath.with_name(f"{stepno}_sum " + metafilepath.stem)
+    cf.saveMetadata(meta_data,metafilepath)
+    np.save(matfilepath, mat_data)
+    print("Harmonics of mat_data is summed and the new shape is:", mat_data.shape)
+    print("\n")
+    savealldata(mat_data, meta_data, filepath)
+    return mat_data, meta_data, filepath
+    
+def baselinefiltering(filepath,stepno):
+    ## The logic and instructions of this is unclear, ask cedric and gloria about this -BP
 
