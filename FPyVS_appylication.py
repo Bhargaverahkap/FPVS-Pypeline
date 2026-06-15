@@ -715,7 +715,7 @@ def sumofharmonics(filepath,stepno):
     print("\n")
     savealldata(mat_data, meta_data, filepath)
     return mat_data, meta_data, filepath
-    
+
 def baselinefiltering(filepath,stepno):
     ## The logic and instructions of this is unclear, ask cedric and gloria about this -BP
 

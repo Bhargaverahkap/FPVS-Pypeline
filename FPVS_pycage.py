@@ -568,10 +568,14 @@ def preprocessFPVSdata_phase2(matfilepath, metafilepath,interp_chnames = None, b
     for label, (start, end) in slices.items():
         data = mat_data[:, :, start:end]
         # print(start:end)
-        filepath = metafilepath.parent / f"{label} {subjid}.npy"
-        np.save(filepath, data)
+        matfilepath = metafilepath.parent / f"{label} {subjid}.npy"
+        np.save(matfilepath, data)
+        meta_data["eventid"] = label
+        metafilepath = matfilepath.with_suffix(".pkl")
+        cf.saveMetadata(meta_data,metafilepath)
         # print(f"{label}: {start}:{end} for size {data.shape[2]}")
-        print(f"event {label} Saved as: {filepath}: ")
+        print(f"event {label} Saved as: {matfilepath}: ")
+
         print("\n")
 
     return mat_data, meta_data, metafilepath
@@ -584,9 +588,9 @@ def postprocessFPVSdata(event_label, folderpath):
     importlib.reload(cf)
 
     print(f"The event you're running this script for is {event_label}")
-
+    print(folderpath)
     files = sorted([f for f in folderpath.glob(f"{event_label}*.npy")
-                    if not f.stem.endswith("merged") and not f.name.startswith(f"{event_label}_")
+                    # if not f.stem.endswith("merged") and not f.name.startswith(f"{event_label}_")
                     ])
     #Excludes the merged files and preexisting files that have event_label_ (e.g. "10_")
     #in front of them
@@ -607,8 +611,9 @@ def postprocessFPVSdata(event_label, folderpath):
         print(data.shape)
         data_list.append(data)
         subj_merged.append(subjid)
+        tempfilepath = file
 
-    tempfilepath = file
+    print(files)
     tempfilepath = tempfilepath.with_suffix(".pkl")
     tempmeta_data = cf.loadMetadata(tempfilepath)
 

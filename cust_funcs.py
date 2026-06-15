@@ -1,4 +1,11 @@
 # Hello Bhargav, welcome to your sandbox
+
+
+import numpy as np
+import trimesh
+import plotly.graph_objects as go
+from scipy.interpolate import Rbf
+
 def rebrand_lw6data(filepath):
     """ Rewrite the meta_data from matlab style encryption to python style encryption to make life easier in python
 
@@ -626,17 +633,20 @@ def showme3DTopomap(activations,meta_data, title="3D EEG Topography"):
     z_p = meta_data["chanlocs"]["Z"].astype(float)
 
     #1. Create skull mesh
-    mesh = trimesh.load('skull.obj', force='mesh')
-    # mesh = trimesh.load("C:\\Users\Admin\Downloads\head.obj", force = 'mesh')
+    mesh = trimesh.load("skull_1.obj", force = 'mesh')
     vertices = mesh.vertices.copy()
-    # vertices[:,[1, 2]] = vertices[:,[2, 1]]
+    vertices[:,[1, 2]] = vertices[:,[2, 1]]
     faces = mesh.faces.copy()
 
 
     #2. Center skull mesh
     skull_center = vertices.mean(axis=0)
+    print("skull_center_1: ", skull_center)
+    # skull_center[2] = skull_center[]
     vertices = vertices - skull_center
-    vertices = vertices / np.max(np.linalg.norm(vertices, axis=1)) # normalizing skull scale
+
+    # vertices = vertices / np.max(np.linalg.norm(vertices, axis=1)) # normalizing skull scale
+
     # vertices[:, 1] *= -1 #IF YOU WANT TO FLIP F/B
     # vertices[:, 0] *= -1 #IF YOU WANT TO FLIP L/R
     # vertices[:, 2] *= -1 #IF YOU WANT TO FLIP U/D
@@ -645,14 +655,19 @@ def showme3DTopomap(activations,meta_data, title="3D EEG Topography"):
     # --- Apply shift ---
     # Compute electrode radius
     elec_radius = np.mean(np.sqrt(x_p ** 2 + y_p ** 2 + z_p ** 2))
+    x_p /= elec_radius
+    y_p /= elec_radius
+    z_p /= elec_radius
 
     # --- Scale electrodes to skull ---
     skull_radius = np.mean(np.linalg.norm(vertices, axis=1))
     scale_factor = skull_radius / elec_radius
-
+    print("skull_factor: ", scale_factor)
+    #
     x_p *= scale_factor
     y_p *= scale_factor
     z_p *= scale_factor
+
     # --- Compute shift ---
     # 2.1. Center electrode coordinates
     elec_center = np.array([
@@ -660,18 +675,22 @@ def showme3DTopomap(activations,meta_data, title="3D EEG Topography"):
         y_p.mean(),
         z_p.mean()
     ])
+
     # marker_scaling = 2.02  # 80% outward
-    marker_scaling = 1.8
-    x_p = (x_p - elec_center[0]) * marker_scaling + elec_center[0]
-    y_p = (y_p - elec_center[1]) * marker_scaling + elec_center[1]
-    z_p = (z_p - elec_center[2]) * marker_scaling + elec_center[2]
-    shift = skull_center - elec_center
+    marker_scaling =1.6
+    shift = (skull_center - elec_center)
+    print("skull_center: ", skull_center)
+    print("elec_center: ", elec_center)
+
+    x_p = marker_scaling*(x_p - shift[0])
+    y_p = marker_scaling*(y_p - shift[1])
+    z_p = marker_scaling*(z_p - shift[2])
 
     # 3. Interpolation
     # Map the 68 activation points to the thousands of vertices on the head mesh
     # 'smooth' helps prevent "spiky" look if one channel is noisy
     rbf_func = Rbf(
-        -1*x_p, -1*y_p, z_p,
+        x_p, y_p, z_p,
         activations,
         function='multiquadric',
         smooth=0.02
@@ -679,7 +698,7 @@ def showme3DTopomap(activations,meta_data, title="3D EEG Topography"):
 
     #interpolating values
     interp_values = rbf_func(
-        vertices[:, 0],
+        -1*vertices[:, 0],
         vertices[:, 1],
         vertices[:, 2]
     )
@@ -688,15 +707,14 @@ def showme3DTopomap(activations,meta_data, title="3D EEG Topography"):
     # Change these values when if you are changing the 'skull.obj' file
 
     #settings for the head mesh
-    # x_p *= -1
-    y_p *= -1
-    y_p += .385
-    z_p += .3
+    # # x_p *= -1
+    # y_p *= -1
+    y_p -= scale_factor* .13
+    # z_p += scale_factor*2
+    # 6
 
 
     # Settings for the skull mesh
-    # y_p += .42
-    # z_p +=.3
     # 4. Create Plotly Figure
     fig = go.Figure()
 
@@ -723,7 +741,7 @@ def showme3DTopomap(activations,meta_data, title="3D EEG Topography"):
     # Add a simple 'Nose' marker for orientation (at +Y)
     # fig.add_trace(go.Scatter3d(
     #     x=[0], y=[1.05], z=[0],
-    #     mode='text',
+    #     mode='text'
     #     text=["FRONT"],
     #     textfont=dict(color="black", size=10),
     #     name='Orientation'
@@ -763,7 +781,7 @@ def showme3DTopomapnewmesh(activations,meta_data, title="3D EEG Topography"):
     z_p = meta_data["chanlocs"]["Z"].astype(float)
 
     #1. Create skull mesh
-    mesh = trimesh.load("C:\\Users\Admin\Downloads\head_closed.obj", force = 'mesh')
+    mesh = trimesh.load("head_openneck.obj", force = 'mesh')
     vertices = mesh.vertices.copy()
     vertices[:,[1, 2]] = vertices[:,[2, 1]]
     faces = mesh.faces.copy()
@@ -772,7 +790,8 @@ def showme3DTopomapnewmesh(activations,meta_data, title="3D EEG Topography"):
     #2. Center skull mesh
     skull_center = vertices.mean(axis=0)
     vertices = vertices - skull_center
-    vertices = vertices / np.max(np.linalg.norm(vertices, axis=1)) # normalizing skull scale
+    # vertices = vertices / np.max(np.linalg.norm(vertices, axis=1)) # normalizing skull scale
+
     # vertices[:, 1] *= -1 #IF YOU WANT TO FLIP F/B
     # vertices[:, 0] *= -1 #IF YOU WANT TO FLIP L/R
     # vertices[:, 2] *= -1 #IF YOU WANT TO FLIP U/D
@@ -785,9 +804,10 @@ def showme3DTopomapnewmesh(activations,meta_data, title="3D EEG Topography"):
     # --- Scale electrodes to skull ---
     skull_radius = np.mean(np.linalg.norm(vertices, axis=1))
     scale_factor = skull_radius / elec_radius
-
+    print("skull_factor: ", scale_factor)
+    #
     x_p *= scale_factor
-    y_p *= scale_factor
+    y_p *= -1*scale_factor
     z_p *= scale_factor
     # --- Compute shift ---
     # 2.1. Center electrode coordinates
@@ -796,18 +816,20 @@ def showme3DTopomapnewmesh(activations,meta_data, title="3D EEG Topography"):
         y_p.mean(),
         z_p.mean()
     ])
+
     # marker_scaling = 2.02  # 80% outward
-    marker_scaling = 1.8
-    x_p = (x_p - elec_center[0]) * marker_scaling + elec_center[0]
-    y_p = (y_p - elec_center[1]) * marker_scaling + elec_center[1]
-    z_p = (z_p - elec_center[2]) * marker_scaling + elec_center[2]
+    marker_scaling =1.15
     shift = skull_center - elec_center
+    print("skull_center: ", skull_center)
+    x_p = marker_scaling*(x_p - shift[0])
+    y_p = marker_scaling*(y_p - shift[1])
+    z_p = marker_scaling*(z_p - shift[2])
 
     # 3. Interpolation
     # Map the 68 activation points to the thousands of vertices on the head mesh
     # 'smooth' helps prevent "spiky" look if one channel is noisy
     rbf_func = Rbf(
-        -1*x_p, -1*y_p, z_p,
+        x_p, y_p, z_p,
         activations,
         function='multiquadric',
         smooth=0.02
@@ -831,8 +853,8 @@ def showme3DTopomapnewmesh(activations,meta_data, title="3D EEG Topography"):
 
 
     # Settings for the skull mesh
-    y_p += .42
-    z_p +=.3
+    y_p += .1*y_p
+    # z_p +=.42
     # 4. Create Plotly Figure
     fig = go.Figure()
 
@@ -859,7 +881,7 @@ def showme3DTopomapnewmesh(activations,meta_data, title="3D EEG Topography"):
     # Add a simple 'Nose' marker for orientation (at +Y)
     # fig.add_trace(go.Scatter3d(
     #     x=[0], y=[1.05], z=[0],
-    #     mode='text',
+    #     mode='text'
     #     text=["FRONT"],
     #     textfont=dict(color="black", size=10),
     #     name='Orientation'
@@ -910,18 +932,22 @@ def showme2DTopomap(activations, meta_data, titlestr="2D EEG Topomap"):
     x = x / r
     y = y / r
 
-    # --- Interpolation (FIXED) ---
+    # --- Interpolation ---
     # Fit the Rbf model on actual data points (x, y) and their values (activations)
     rbf = Rbf(-1*x, y, activations, function='multiquadric', smooth=0.02)
+
+    #adding this so that the channel markers extend beyond the head circle, which will depict a more accurate picture
+    y = (y-.06)*1.05
+    x = x*1.05
 
     # Generate grid
     grid_x, grid_y = np.mgrid[-1.3:1.3:300j, -1.3:1.3:300j]
 
-    # Evaluate the fitted model on the grid
+    # Evaluating the fitted model on the grid
     grid_z = rbf(grid_x, grid_y)
 
     # Mask everything outside the head boundary (radius = 1.0)
-    mask = (grid_x) ** 2 + (grid_y+.06) ** 2 > 1.05 ** 2
+    mask = (grid_x) ** 2 + (grid_y+.06) ** 2 > 1.05 ** 2 #Off center masking to include the bottom of the skull, not displayed in the top view
     grid_z[mask] = np.nan
 
     # --- Plot ---
