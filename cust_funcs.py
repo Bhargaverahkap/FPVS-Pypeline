@@ -215,43 +215,6 @@ def showmeSignal(signal,duration=None,pltsize=None,titlestr=None,epochid=None):
     plt.figure
     plt.show()
 
-# def showmeInterpSignal(signal,duration=None,pltsize=None,titlestr=None,epochid=None,legendlabels=None): #under development
-#     import numpy as np
-#     import matplotlib.pyplot as plt
-#
-#     if legendlabels is None:
-#         legendlabels = [f"epochid:{epochid}"]
-#
-#     if len(signal.shape)>1:
-#         signal = np.squeeze(signal)
-#
-#     if epochid is None:
-#         epochid = 0
-#
-#     if duration is None:
-#         duration = np.linspace(0,len(signal)-1,len(signal),dtype=int)
-#
-#     if pltsize is None:
-#         pltsize = [12, 3]
-#
-#     if titlestr is None:
-#         titlestr = f"Channel activation, epoch:{epochid}"
-#
-#     #actual plotting
-#     plt.figure(figsize=pltsize)
-#     plt.plot(duration,signal,lw=1)
-#     plt.title(titlestr)
-#     plt.xlabel("Samples")
-#     plt.ylabel("amplitude")
-#     if signal.shape[1] >1:
-#         legend_labels = [f"{legendlabels[i]}" for i in range(signal.shape[1])]
-#
-#     if signal.shape[1]==1:
-#         plt.legend(legendstr,loc="upper right")
-#     else:
-#         plt.legend(legend_labels,loc="upper right")
-#     plt.show()
-
 def showmeSummaryPlot(signal,fs,chname,subjid,pltsize=None,freqlim=None,epochid=None):
     import numpy as np
     import matplotlib.pyplot as plt
@@ -334,20 +297,20 @@ def givemeNNearestNeighbour(meta_data,chnameid):
 
     return sorted_idx[1:],sorted_labels[1:]
 
-def showmeSignalUI(mat_data,meta_data,xlim=None,ylim=None):
+def showmeSignalUI(npy_data,meta_data,xlim=None,ylim=None):
     import ipywidgets as widgets
     from IPython.display import display
     import matplotlib.pyplot as plt
     import numpy as np
 
-    epoch = [f"epoch{i}" for i in range(mat_data.shape[2])]
+    epoch = [f"epoch{i}" for i in range(npy_data.shape[2])]
     labels = np.squeeze(meta_data["chanlocs"]["labels"])
     labels = labels.astype(str)
 
     # 1. Generate Dummy Data (40 Epochs, 60 Series, 100 Timepoints)
     # Shape: (Epochs, Series, Time)
 
-    data_matrix = np.moveaxis(mat_data,0,-1) #moves first axis to the last
+    data_matrix = np.moveaxis(npy_data,0,-1) #moves first axis to the last
     print(data_matrix.shape)
     # 2. The Plotting Function
     def plot_data(epoch_idx, selected_series):
@@ -375,7 +338,7 @@ def showmeSignalUI(mat_data,meta_data,xlim=None,ylim=None):
     # 3. The Widgets
     # Slider for "scrolling" through 40 epochs
     epoch_slider = widgets.IntSlider(
-        value=0, min=0, max=mat_data.shape[2]-1, step=1,
+        value=0, min=0, max=npy_data.shape[2]-1, step=1,
         description='Epoch:',
         continuous_update=True,  # Update plot while dragging
         layout={'width': '1000px'}
@@ -383,7 +346,7 @@ def showmeSignalUI(mat_data,meta_data,xlim=None,ylim=None):
 
     # Multi-select for the 60 series
     series_selector = widgets.SelectMultiple(
-        options=[(labels[i], i) for i in range(mat_data.shape[1])],
+        options=[(labels[i], i) for i in range(npy_data.shape[1])],
         value=[0, 1, 2, 3],  # Default selection (first 4)
         description='Channel:',
         layout={'height': '550px', 'width': '150px'}
@@ -404,14 +367,14 @@ def showmeSignalUI(mat_data,meta_data,xlim=None,ylim=None):
 
     display(ui)
 
-def showmeSignalUIandInterp(mat_data, meta_data, xlim=None, ylim=None):
+def showmeSignalUIandInterp(npy_data, meta_data, xlim=None, ylim=None):
     import ipywidgets as widgets
     from IPython.display import display
     import matplotlib.pyplot as plt
     import numpy as np
     # Setup data and labels
     labels = np.squeeze(meta_data["chanlocs"]["labels"]).astype(str)
-    data_matrix = np.moveaxis(mat_data, 0, -1)
+    data_matrix = np.moveaxis(npy_data, 0, -1)
 
     # Storage for different categories of bad channels
     to_interpolate = []
@@ -419,12 +382,12 @@ def showmeSignalUIandInterp(mat_data, meta_data, xlim=None, ylim=None):
 
     # 1. Widgets
     epoch_slider = widgets.IntSlider(
-        value=0, min=0, max=mat_data.shape[2] - 1,
+        value=0, min=0, max=npy_data.shape[2] - 1,
         description='Epoch:', layout={'width': '800px'}
     )
 
     series_selector = widgets.SelectMultiple(
-        options=[(labels[i], i) for i in range(mat_data.shape[1])],
+        options=[(labels[i], i) for i in range(npy_data.shape[1])],
         value=[0, 1, 2, 3],
         description='Channels:', layout={'height': '400px', 'width': '200px'}
     )
@@ -515,10 +478,10 @@ def showmeSignalUIandInterp(mat_data, meta_data, xlim=None, ylim=None):
         srtd_idx = np.where(~np.isin(srt_labels, badch))[0]
         srtd_idx = srtd_idx[:3]
         badch = np.append(badch, srt_labels[srtd_idx])
-        mat_data[:,to_interpolate[i],:] = np.mean(mat_data[:,srtd_idx,:], axis=1)
+        npy_data[:,to_interpolate[i],:] = np.mean(npy_data[:,srtd_idx,:], axis=1)
 
 
-    return mat_data,{"interpolate": to_interpolate, "bad_no_interp": bad_but_ignore}
+    return npy_data,{"interpolate": to_interpolate, "bad_no_interp": bad_but_ignore}
 
 def givemeUniqueTuples(data,tolerance = None):
     if tolerance is None:
@@ -998,7 +961,7 @@ def showme2DTopomap(activations, meta_data, titlestr="2D EEG Topomap"):
     plt.colorbar(im, ax=ax, shrink=0.7)
     plt.show()
 
-def showmeICAoverlayedondata(mat_data, ica_data ,labels, chid = None, subjid = None):
+def showmeICAoverlayedondata(npy_data, ica_data ,labels, chid = None, subjid = None):
     import ipywidgets as widgets
     from IPython.display import display
     import matplotlib.pyplot as plt
@@ -1009,8 +972,8 @@ def showmeICAoverlayedondata(mat_data, ica_data ,labels, chid = None, subjid = N
 
     chname = labels[chid]
     # EEG signal (one channel)
-    # mat_data = np.moveaxis(mat_data,0,-1) #moves first axis to the last
-    signal = mat_data[ :, chid ]
+    # npy_data = np.moveaxis(npy_data,0,-1) #moves first axis to the last
+    signal = npy_data[ :, chid ]
 
     # Normalize function (important for visual comparison)
     def normalize(x): return (x - np.mean(x)) / np.std(x)
@@ -1057,9 +1020,9 @@ def showmeICAoverlayedondata(mat_data, ica_data ,labels, chid = None, subjid = N
 
     display(widgets.VBox([ICA_slider, out]))
 
-def showmeSTFTSpectrogram(mat_data, chid, fs = 256 , titlestr = None,freqlim = None, binsize = None,isoverlap = None):
+def showmeSTFTSpectrogram(npy_data, chid, fs = 256 , titlestr = None,freqlim = None, binsize = None,isoverlap = None):
     # create a spectrogram of the channel activations for all time.
-    # input the mat_data and channel id, function assumes sampling frequency is 256 Hz
+    # input the npy_data and channel id, function assumes sampling frequency is 256 Hz
 
     # 256 sample STFT with
     import scipy.signal as signal
@@ -1077,7 +1040,7 @@ def showmeSTFTSpectrogram(mat_data, chid, fs = 256 , titlestr = None,freqlim = N
     if binsize == None:
         binsize = 512
 
-    chsignal = mat_data[ :, chid]
+    chsignal = npy_data[ :, chid]
     if isoverlap:
         f, t, Sxx = signal.spectrogram(chsignal, fs,nperseg=binsize,noverlap=binsize/2)
     else:
@@ -1092,7 +1055,7 @@ def showmeSTFTSpectrogram(mat_data, chid, fs = 256 , titlestr = None,freqlim = N
     plt.colorbar(label='Power[dB]')
     plt.show()
 
-def showmeMWSpectrogram(mat_data, chid, epochid , fs = 256 , titlestr = None, freqlim = None, binsize = None,isoverlap = None):
+def showmeMWSpectrogram(npy_data, chid, epochid , fs = 256 , titlestr = None, freqlim = None, binsize = None,isoverlap = None):
     import numpy as np
     import matplotlib.pyplot as plt
     import mne
@@ -1101,10 +1064,10 @@ def showmeMWSpectrogram(mat_data, chid, epochid , fs = 256 , titlestr = None, fr
         freqlim = [0,50]
     if titlestr == None:
         titlestr = f' MW Spectrogram for channel {chid}'
-    if len(mat_data.shape) == 2:
+    if len(npy_data.shape) == 2:
         epochid = 0
 
-    signal = np.moveaxis(mat_data, 0, -1)
+    signal = np.moveaxis(npy_data, 0, -1)
     signalOI = signal[chid, epochid, :]
     freqs = np.linspace(1, 60, 100)
 

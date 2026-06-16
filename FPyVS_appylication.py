@@ -11,27 +11,101 @@ importlib.reload(cf)
 
 def loadalldata(filepath):
     metafilepath = filepath.with_suffix(".pkl")
-    matfilepath = filepath.with_suffix(".npy")
+    npyfilepath = filepath.with_suffix(".npy")
     meta_data = cf.loadMetadata(metafilepath)
-    mat_data = np.load(matfilepath)
-    return mat_data, meta_data, matfilepath, metafilepath
+    npy_data = np.load(npyfilepath)
+    return npy_data, meta_data, npyfilepath, metafilepath
 
-def savealldata(mat_data, meta_data, filepath):
-    matfilepath = filepath.with_suffix(".npy")
+def savealldata(npy_data, meta_data, filepath):
+    npyfilepath = filepath.with_suffix(".npy")
     metafilepath = filepath.with_suffix(".pkl")
     cf.saveMetadata(meta_data, metafilepath)
-    np.save(matfilepath, mat_data)
+    np.save(npyfilepath, npy_data)
 
-# 
-# def splitBDFdata(filepath):
-#     import mne
-# 
-#     if filepath.suffix != '.bdf':
-#         raise ValueError("The file is not a .bdf file, please enter the filepath for a .bdf file and try again")
-# 
-#     raw = mne.io.read_raw_bdf(filepath, preload=True)
-# 
-#     matdata, times = raw.get_data(return_times=True)
+def extractdatafrombdf(filepath):
+    if filepath.suffix != ".bdf":
+        filepath = filepath.with_suffix(".bdf")
+
+    raw = mne.io.read_raw_bdf(filepath, preload=True)
+
+    py_data, times = raw.get_data(return_times = True)
+    status_data = raw.get_data(picks=["Status"])[0]
+
+    # 3. Strip the baseline offset (Bit 16 shift) using bitwise operations
+    # This isolates the actual 8-bit or 16-bit parallel port lines
+    corrected_status = np.bitwise_and(status_data.astype(int), 255)
+
+
+    # 4. Inject the clean triggers back into a temporary raw copy
+    raw_corrected = raw.copy()
+    raw_corrected._data[raw.ch_names.index("Status")] = corrected_status
+
+    # 5. Extract events from the cleaned channel
+    events_all = mne.find_events(raw_corrected, stim_channel="Status", shortest_event=1)
+    fs = raw_corrected.info['sfreq']
+
+    org_data = {
+        "gui_info": ['no gui, no info'],
+        "originalfilepath": filepath,
+    }
+    chanlocs = {
+        "labels": raw_corrected.ch_names,
+        "topo_enabled": np.zeros([len(raw_corrected.ch_names)],bool = True),
+        "SEEG_enabled": np.zeros([len(raw_corrected.ch_names)],bool = True)
+    }
+
+    events = {
+        "code": [events_all[i][2] for i in len(events_all)],
+        "sample": [events_all[i][0] for i in len(events_all)],
+        "latency": [events_all[i][0]/fs for i in len(events_all)]
+    }
+
+    fields = {
+        "filetype": "Type of file this is stored as",
+        "name": "Name of the file as stored in the meta_data",
+        "tags": "I have no idea, but this is as it is stored in the meta_data",
+        "history": "Record of all changes made to the data as operation stored as suffix: history till then",
+        "origins": "Origins of the data, contains gui info and original filepath",
+        "datasize": "size of the data",
+        "xstart": "I have no idea what this is, but this was present in the original meta_data",
+        "ystart": "I have no idea what this is, but this was present in the original meta_data",
+        "zstart": "I have no idea what this is, but this was present in the original meta_data",
+        "xstep": "I have no idea what this is, but this was present in the original meta_data",
+        "ystep": "I have no idea what this is, but this was present in the original meta_data",
+        "zstep": "I have no idea what this is, but this was present in the original meta_data",
+        "chanlocs": "channel location data, stored as follows",
+        "chanlocs.labels": "Channel labels stored as strings",
+        "chanlocs.SEEG_enabled": "I have no idea what this is, but was present in the original meta_data",
+        "chanlocs.TOPO_enabled": "I have no idea what this is, but was present in the original meta_data",
+        "events": "event data as stored as follows",
+        "events.code": "event code as described in the triggers document",
+        "events.latency": "time delay of current trigger from start of experiment",
+        "events.epoch": "event code as described in the triggers document",
+        "fs": "Sampling frequency in Hz",
+    }
+
+    meta_data = {
+        "filetype": 'time_amplitude',
+        "name": raw_corrected.info['subject_info']['his_id'],
+        "tags": {},
+        "history": {},
+        "origins": org_data,
+        "datasize": py_data.shape,
+        "xstart": 0.0,
+        "ystart": 0.0,
+        "zstart": 0.0,
+        "xstep": 0.00048828125,
+        "ystep": 1,
+        "zstep": 1,
+        "chanlocs": chanlocs,
+        "events": events,
+        "fs": fs,
+        "fields": fields
+    }
+    savealldata(py_data,meta_data,filepath)
+
+    print("the keys in the new data are: ", meta_data.keys())
+
 
 def renamechannels(filepath,stepno,  targets = None, replacements = None):
 
@@ -42,7 +116,7 @@ def renamechannels(filepath,stepno,  targets = None, replacements = None):
     if replacements == None:
         replacements = ["I1", "I2", "PO9", "PO10"]
 
-    mat_data , meta_data, matfilepath, metafilepath = loadalldata(filepath)
+    npy_data , meta_data, npyfilepath, metafilepath = loadalldata(filepath)
     labels = (meta_data["chanlocs"]["labels"])
     mapping = dict(zip(targets, replacements))
     labels = [mapping.get(label, label) for label in labels]
@@ -51,13 +125,13 @@ def renamechannels(filepath,stepno,  targets = None, replacements = None):
     extnstr = stepno + "_chanlabels "
     metafilepath = filepath.with_name(extnstr + metafilepath.stem + metafilepath.suffix)
     metafilepath = metafilepath.with_suffix(".pkl")
-    matfilepath = filepath.with_name(extnstr + matfilepath.stem)
+    npyfilepath = filepath.with_name(extnstr + npyfilepath.stem)
     meta_data = cf.updatemetadataHistory(meta_data, extnstr)
-    savealldata(mat_data, meta_data, filepath)
+    savealldata(npy_data, meta_data, filepath)
     print("channels ", targets ," are renamed as ",replacements ," and saved in and as: ", metafilepath)
     print("\n")
 
-    return mat_data,meta_data,matfilepath,metafilepath
+    return npy_data, meta_data, filepath
 
 def electrodelocationchange(filepath, stepno, electrodelocationfilepath=None):
 
@@ -66,7 +140,7 @@ def electrodelocationchange(filepath, stepno, electrodelocationfilepath=None):
 
     stepno = stepno.astype(str)
     electrode_data = np.load(electrodelocationfilepath)
-    mat_data , meta_data, matfilepath, metafilepath = loadalldata(filepath)
+    npy_data , meta_data, npyfilepath, metafilepath = loadalldata(filepath)
 
     Xcord = electrode_data[:, 1]
     Xcord = np.append(Xcord, ['0', '0', '0', '0',
@@ -132,123 +206,124 @@ def electrodelocationchange(filepath, stepno, electrodelocationfilepath=None):
     extnstr = stepno + "_chanlocs "
     filepath = filepath.with_name( extnstr + filepath.stem)
     meta_data = cf.updatemetadataHistory(meta_data, extnstr)
-    savealldata(mat_data, meta_data, filepath)
+    savealldata(npy_data, meta_data, filepath)
     print("elec. locations are changed! and saved as ", metafilepath)
     print("\n")
-    return mat_data, meta_data, matfilepath, metafilepath
+    return npy_data, meta_data, filepath
 
 def downsampling(filepath, stepno, dsfact = None):
     stepno = stepno.astype(str)
-    mat_data , meta_data, matfilepath, metafilepath = loadalldata(filepath)
+    npy_data , meta_data, npyfilepath, metafilepath = loadalldata(filepath)
     if dsfact is None:
         dsfact = meta_data["fs"]//256
 
     extnstr = stepno + "_ds "
-    ndpts = mat_data.shape[0]  # number of data points
-    nch = mat_data.shape[1]  # number of channels
+    ndpts = npy_data.shape[0]  # number of data points
+    nch = npy_data.shape[1]  # number of channels
 
     ds_data = np.zeros((ndpts // dsfact, nch))
 
     dsampind = range(0, ndpts, dsfact)
-    ds_data[:, :nch] = mat_data[dsampind, :nch]
+    ds_data[:, :nch] = npy_data[dsampind, :nch]
 
     # saving the data file
-    mat_data = ds_data.copy()
+    npy_data = ds_data.copy()
     del ds_data
 
     meta_data["fs"] = int(meta_data["fs"]) // dsfact
     filepath = filepath.with_name( extnstr + filepath.stem)
-    savealldata(mat_data, meta_data, filepath)
-    return mat_data, meta_data, filepath
+    savealldata(npy_data, meta_data, filepath)
+    return npy_data, meta_data, filepath
 
 def delete_channels(filepath,stepno,deletechnames = None):
     stepno = stepno.astype(str)
     if deletechnames == None:
         deletechnames = ['EXG5', 'EXG6', 'Status']
 
-    mat_data , meta_data, matfilepath, metafilepath = loadalldata(filepath)
+    npy_data , meta_data, npyfilepath, metafilepath = loadalldata(filepath)
     labels = meta_data["chanlocs"]["labels"]
     indices = np.where(np.isin(deletechnames, labels))[0]
     indices = indices.astype(int)
     mask = np.ones(len(labels), dtype=bool)
     mask[indices] = False
     # deleting data
-    mat_data = mat_data[:, mask]
+    npy_data = npy_data[:, mask]
 
     for key in meta_data["chanlocs"].keys():
         arr = meta_data["chanlocs"][key]
         meta_data["chanlocs"][key] = np.delete(arr, indices)
 
-    meta_data["shape"] = mat_data.shape
-    meta_data["size"] = mat_data.size
+    meta_data["shape"] = npy_data.shape
+    meta_data["size"] = npy_data.size
     meta_data["deleted_chnames"] = [labels[i] for i in indices]
 
     extnstr = stepno + "_chan_select "
     meta_data = cf.updatemetadataHistory(meta_data,extnstr)
     metafilepath = metafilepath.with_name(extnstr + metafilepath.stem)
-    matfilepath = matfilepath.with_name(extnstr + matfilepath.stem)
-    savealldata(mat_data, meta_data, filepath)
+    npyfilepath = npyfilepath.with_name(extnstr + npyfilepath.stem)
+    savealldata(npy_data, meta_data, filepath)
 
     print("channels being deleted are: ", meta_data["deleted_chnames"])
     print("\n data saved in ",metafilepath)
     print("\n")
 
-    return mat_data, meta_data, matfilepath, metafilepath
+    return npy_data, meta_data, filepath
 
 def bandpassfilter(filepath,stepno,filterparameters = None):
     if filterparameters == None:
         filterparameters = [0.05, 100, 4] #lowpass, highpass and order of the filter
 
     stepno = stepno.astype(str)
-    mat_data , meta_data, matfilepath, metafilepath = loadalldata(filepath)
+    npy_data , meta_data, npyfilepath, metafilepath = loadalldata(filepath)
     fs = meta_data["fs"]
-    nch = mat_data.shape[1]
+    nch = npy_data.shape[1]
 
     # Design Butterworth bandpass filter
     nyquist = 0.5 * fs
     low = filterparameters[0] / nyquist
     high = filterparameters[1] / nyquist
     b, a = butter(filterparameters[2], [low, high], btype='band')
-    filt_data = np.zeros(mat_data.shape)
+    filt_data = np.zeros(npy_data.shape)
 
     # Apply filter
     for chid in range(0, nch, 1):
-        signal = mat_data[:, chid]
+        signal = npy_data[:, chid]
         filt_data[:, chid] = filtfilt(b, a, signal)  # bandpass filtering
 
     meta_data["bandpass filter param"] = filterparameters
     meta_data["fields"].update({"bandpass filter param": "low cutoff, high cutoff, filter order"})
 
-    mat_data = filt_data.copy()
+    npy_data = filt_data.copy()
     del filt_data
 
     extnstr = stepno + "_fft "
     meta_data = cf.updatemetadataHistory(meta_data,extnstr)
     filepath = filepath.with_name( extnstr + filepath.stem)
-    savealldata(mat_data, meta_data, filepath)
+    savealldata(npy_data, meta_data, filepath)
 
     print("data has been band pass filtered", [filterparameters[0], filterparameters[1]], "order: ", filterparameters[2])
     print("data saved as ", filepath)
     print("\n")
+    return npy_data, meta_data, filepath
 
 def notchfilter(filepath,stepno,notchparameters = None):
     if notchparameters == None:
         notchparameters = [4,50,100]
 
 
-    mat_data , meta_data, matfilepath, metafilepath = loadalldata(filepath)
+    npy_data , meta_data, npyfilepath, metafilepath = loadalldata(filepath)
     fs = meta_data["fs"]
-    nch = mat_data.shape[1]
+    nch = npy_data.shape[1]
     an = []
     bn = []
     for numfreq in range(len(notchparameters)-1):
         an[numfreq] , bn[numfreq] = iirnotch(notchparameters[numfreq+1],notchparameters[0],fs)
 
     for chid in range(0, nch, 1):
-        signal = mat_data[:, chid]
+        signal = npy_data[:, chid]
         for numfilter in range(len(an)):
             signal = filtfilt(bn[numfilter],an[numfilter], signal)
-        mat_data[:, chid] = signal
+        npy_data[:, chid] = signal
 
     meta_data["notchfilter param"] = notchparameters
     meta_data["fields"].update({"notchfilter param": "slope, frequencies to filter"})
@@ -257,17 +332,17 @@ def notchfilter(filepath,stepno,notchparameters = None):
     cf.updatemetadataHistory(meta_data, extnstr)
     filepath = filepath.with_name( extnstr + filepath.stem)
 
-    savealldata(mat_data, meta_data, filepath)
+    savealldata(npy_data, meta_data, filepath)
 
     print("notch filtering done to filter out frequencies:", notchparameters[1:]," slope of the filter is: ", notchparameters[0])
-    return mat_data, meta_data, matfilepath, metafilepath
+    return npy_data, meta_data, filepath
 
 def performICA(filepath, ch_name = None):
 
     if ch_name == None:
         ch_name = 'Fp1'
 
-    mat_data, meta_data, matfilepath, metafilepath = loadalldata(filepath)
+    npy_data, meta_data, npyfilepath, metafilepath = loadalldata(filepath)
     # Design Butterworth bandpass filter
     lowcut = 1
     highcut = 10
@@ -280,12 +355,12 @@ def performICA(filepath, ch_name = None):
     high = highcut / nyquist
     fs = int((meta_data["fs"]))
 
-    dataforICA = np.zeros(mat_data.shape)  # removing nonessential dims
+    dataforICA = np.zeros(npy_data.shape)  # removing nonessential dims
     b, a = butter(order,[low, high], btype='band')
     bn, an = iirnotch(50, slope, fs)
 
-    for chid in range(mat_data.shape[1]):
-        sig = filtfilt(b, a, mat_data[:, chid])
+    for chid in range(npy_data.shape[1]):
+        sig = filtfilt(b, a, npy_data[:, chid])
         dataforICA[:, chid] = filtfilt(bn, an, sig)
         # dataforICA[:, chid] = filtfilt(bn2, an2, sig)
 
@@ -317,31 +392,31 @@ def performICA(filepath, ch_name = None):
     return ica, raw, ica_data, eog_indices
 
 def overlayICAondata(filepath, ica_data):
-    matfilepath = filepath.with_suffix(".npy")
+    npyfilepath = filepath.with_suffix(".npy")
     metafilepath = filepath.with_suffix(".pkl")
-    mat_data = np.load(matfilepath)
+    npy_data = np.load(npyfilepath)
     meta_data = cf.loadMetadata(metafilepath)
     labels = np.array(meta_data["chanlocs"]["labels"], dtype=object)
-    subjid = matfilepath.stem.split()[-1]
-    cf.showmeICAoverlayedondata(mat_data, ica_data, labels=labels,subjid=subjid)
+    subjid = npyfilepath.stem.split()[-1]
+    cf.showmeICAoverlayedondata(npy_data, ica_data, labels=labels,subjid=subjid)
 
 def applyICA(filepath, ica, raw, rmidx):
-    mat_data, meta_data = loadalldata(filepath)
+    npy_data, meta_data = loadalldata(filepath)
     print("Removing ICA components:", rmidx)
     ica.exclude = rmidx
     raw_clean = ica.apply(raw.copy())
-    mat_data = raw_clean.get_data()
+    npy_data = raw_clean.get_data()
 
     meta_data["ICA"] = rmidx
-    meta_data["shape"] = mat_data.shape
-    meta_data["size"] = mat_data.size
+    meta_data["shape"] = npy_data.shape
+    meta_data["size"] = npy_data.size
     extnstr = "ica_filt "
     meta_data = cf.updatemetadataHistory(meta_data,extnstr)
     filepath = filepath.with_name( extnstr + filepath.stem)
-    mat_data = np.moveaxis(mat_data, -1, 0)
-    savealldata(mat_data, meta_data, filepath)
+    npy_data = np.moveaxis(npy_data, -1, 0)
+    savealldata(npy_data, meta_data, filepath)
     print("ICA performed, data saved as ", filepath)
-    return mat_data, meta_data, filepath
+    return npy_data, meta_data, filepath
 
 def segmentation(filepath, stepno, startcode = None, segmentparams = None):
     stepno = stepno.astype(str)
@@ -354,7 +429,7 @@ def segmentation(filepath, stepno, startcode = None, segmentparams = None):
         # epoch length, startlatency, endlatency
         # negative latency implies the splice is made before the start time
 
-    mat_data, meta_data, matfilepath, metafilepath =loadalldata(filepath)
+    npy_data, meta_data, npyfilepath, metafilepath =loadalldata(filepath)
     fs = meta_data["fs"]
     startlatencyforstart = segmentparams[1]
     endlatencyforstart = segmentparams[0] + segmentparams[1]
@@ -428,7 +503,7 @@ def segmentation(filepath, stepno, startcode = None, segmentparams = None):
     # I have then removed the time and sample stamp of all those events that are not relevant to the experiment's analysis like 21/22/50/55
     # trimming the data points
 
-    nch = mat_data.shape[1]
+    nch = npy_data.shape[1]
     ep_data = np.zeros((duration*fs , nch, sum(eventreps)))
     ## add functionality that makes this compatible with all expts, not just this one ie. self calculating the 41 in this case
     count = 0
@@ -445,7 +520,7 @@ def segmentation(filepath, stepno, startcode = None, segmentparams = None):
 
             eventrep_dat = np.arange(dsamp_start, dsamp_end, dtype="int")
             # print("range:", dsamp_start, "-", dsamp_end, " length:", dsamp_end - dsamp_start)
-            ep_data[:, :nch, count] = mat_data[eventrep_dat, :nch]
+            ep_data[:, :nch, count] = npy_data[eventrep_dat, :nch]
             numrep.append(count)
             count += 1
             # final data will have dimensions like so:(ndpts, nch, nevents)
@@ -454,17 +529,17 @@ def segmentation(filepath, stepno, startcode = None, segmentparams = None):
 
     print(startendsampid)
     if errorflag == 0:
-        mat_data = ep_data.copy()
+        npy_data = ep_data.copy()
         meta_data["eventrepid"] = eventrepdata
 
     extnstr = stepno + "_ep "
     meta_data = cf.updatemetadataHistory(meta_data, extnstr)
     filepath = filepath.with_name( extnstr + filepath.stem)
-    savealldata(mat_data, meta_data, filepath)
-    return mat_data, meta_data, filepath
+    savealldata(npy_data, meta_data, filepath)
+    return npy_data, meta_data, filepath
 
 def interpolate(filepath,stepno, interp_chnames, bad_chnames = None):
-    mat_data, meta_data, matfilepath, metafilepath = loadalldata(filepath)
+    npy_data, meta_data, npyfilepath, metafilepath = loadalldata(filepath)
     stepno = stepno.astype(str)
     labels = (meta_data["chanlocs"]["labels"])
     interp_chids = np.where(np.isin(labels, interp_chnames))[0]
@@ -477,7 +552,7 @@ def interpolate(filepath,stepno, interp_chnames, bad_chnames = None):
         srtd_idx = np.where(~np.isin(srt_labels, badch))[0]
         srtd_idx = srtd_idx[:3]
         badch = np.append(badch, srt_labels[srtd_idx])
-        mat_data[:, interp_chids[i], :] = np.mean(mat_data[:, srtd_idx, :], axis=1)
+        npy_data[:, interp_chids[i], :] = np.mean(npy_data[:, srtd_idx, :], axis=1)
         new_entry = {interp_chnames[i]: srt_labels[srtd_idx]}
         interp_specs.update(new_entry)
         print(badch, "is interpolated using ", [labels[i] for i in srtd_idx])
@@ -485,27 +560,27 @@ def interpolate(filepath,stepno, interp_chnames, bad_chnames = None):
     meta_data["interpolation"] = interp_specs
     extn_str = f"{len(interp_chnames)}_interp"
 
-    filepath = matfilepath.with_name(extn_str + filepath.stem)
-    savealldata(mat_data, meta_data, filepath)
+    filepath = npyfilepath.with_name(extn_str + filepath.stem)
+    savealldata(npy_data, meta_data, filepath)
     print("channels are interpolated and saved as ", filepath)
     print("\n")
-    return mat_data, meta_data, filepath, badch
+    return npy_data, meta_data, filepath, badch
 
 def globalreferencing(filepath,stepno, badchids= None):
 
-    mat_data, meta_data,matfilepath,metafilepath = loadalldata(filepath)
+    npy_data, meta_data,npyfilepath,metafilepath = loadalldata(filepath)
     labels = meta_data["chanlocs"]["labels"]
     goodchids = np.where(~np.isin(labels, badchids))[0]
-    glreference = np.mean(mat_data[:, goodchids, :], axis=1,keepdims=True)
-    mat_data = mat_data - glreference
+    glreference = np.mean(npy_data[:, goodchids, :], axis=1,keepdims=True)
+    npy_data = npy_data - glreference
     meta_data["ref_chids"] = goodchids
     extn_str = f"{stepno}_ref"
     filepath = filepath.with_name(extn_str + filepath.stem)
-    savealldata(mat_data, meta_data, filepath)
-    return mat_data, meta_data, filepath
+    savealldata(npy_data, meta_data, filepath)
+    return npy_data, meta_data, filepath
 
 def spearateepochs(filepath, mergekeys = None, mergekeyflag = None):
-    mat_data, meta_data, matfilepath,metafilepath = loadalldata(filepath)
+    npy_data, meta_data, npyfilepath,metafilepath = loadalldata(filepath)
     subjid = metafilepath.stem.split()[-1]
     if len(subjid) != 8:  # Prevents mistaking something else as the subject id as we know that subject id is usually 8 characters long
         subjid = metafilepath.stem.split()[-2]
@@ -537,7 +612,7 @@ def spearateepochs(filepath, mergekeys = None, mergekeyflag = None):
         list(map(slices.pop, delkeys))
 
     for label, (start, end) in slices.items():
-        data = mat_data[:, :, start:end]
+        data = npy_data[:, :, start:end]
         # print(start:end)
         filepath = metafilepath.parent / f"{label} {subjid}.npy"
         np.save(filepath, data)
@@ -545,7 +620,7 @@ def spearateepochs(filepath, mergekeys = None, mergekeyflag = None):
         print(f"event {label} Saved as: {filepath}: ")
         print("\n")
 
-    return mat_data, meta_data, filepath
+    return npy_data, meta_data, filepath
 
 def mergeepochs(folderpath,event_label):
     print(f"The event you're running this script for is {event_label}")
@@ -577,21 +652,21 @@ def mergeepochs(folderpath,event_label):
     tempfilepath = tempfilepath.with_suffix(".pkl")
     tempmeta_data = cf.loadMetadata(tempfilepath)
 
-    mat_data = np.concatenate(data_list, axis=2)
-    print(mat_data.shape)
+    npy_data = np.concatenate(data_list, axis=2)
+    print(npy_data.shape)
     meta_data = {
         "event_label": event_label,
         "subjids": subj_merged,
-        "shape": mat_data.shape,
-        "size": mat_data.size,
+        "shape": npy_data.shape,
+        "size": npy_data.size,
         "fs": 256,
         "chanlocs": tempmeta_data["chanlocs"],
         "history": {}
     }
 
     filepath = folderpath/ f"{event_label} MERGED.npy"
-    savealldata(mat_data, meta_data,folderpath)
-    return mat_data, meta_data, filepath
+    savealldata(npy_data, meta_data,folderpath)
+    return npy_data, meta_data, filepath
 
 def frequencytransform(filepath,stepno,freqbin = None):
     if freqbin == None:
@@ -601,40 +676,41 @@ def frequencytransform(filepath,stepno,freqbin = None):
     freq_max = freqbin[1]
     stepno = stepno.astype(str)
     extnstr = f"{stepno}_fft"
-    mat_data, meta_data, matfilepath,metafilepath = loadalldata(filepath)
+    npy_data, meta_data, npyfilepath,metafilepath = loadalldata(filepath)
     fs = meta_data["fs"]
     meta_data["freq_range"] = [freq_min, freq_max]
 
-    freqs = np.fft.fftfreq(mat_data.shape[0], 1 / fs)
+    freqs = np.fft.fftfreq(npy_data.shape[0], 1 / fs)
     idx = np.where((freqs >= freq_min) & (freqs <= freq_max))[0]
     freq_idx = freqs[idx]
-    FFT_data = np.zeros([len(freq_idx), mat_data.shape[1], mat_data.shape[2]])
+    FFT_data = np.zeros([len(freq_idx), npy_data.shape[1], npy_data.shape[2]])
 
-    for chid in range(mat_data.shape[1]):
-        for epochid in range(mat_data.shape[2]):
-            FFT_signal = np.abs(np.fft.fft((mat_data[:, chid, epochid])))
+    for chid in range(npy_data.shape[1]):
+        for epochid in range(npy_data.shape[2]):
+            FFT_signal = np.abs(np.fft.fft((npy_data[:, chid, epochid])))
             FFT_data[:, chid, epochid] = FFT_signal[idx]
 
     meta_data["freq_range"] = [freq_min, freq_max]
-    mat_data = FFT_data.copy()
+    npy_data = FFT_data.copy()
     cf.updatemetadataHistory(meta_data,extnstr)
     filepath = filepath.with_name(extnstr + filepath.stem)
     del FFT_data
-    savealldata(mat_data, meta_data, filepath)
-    return mat_data, meta_data, filepath
+    savealldata(npy_data, meta_data, filepath)
+    return npy_data, meta_data, filepath
 
 def averagingacrosstrials(filepath,stepno):
     stepno = stepno.astype(str)
-    mat_data, meta_data, matfilepath,metafilepath = loadalldata(filepath)
-    mat_data = np.mean(mat_data, axis=2)
+    npy_data, meta_data, npyfilepath,metafilepath = loadalldata(filepath)
+    npy_data = np.mean(npy_data, axis=2)
     extnstr = f"{stepno}_avg"
     cf.updatemetadataHistory(meta_data,extnstr)
-    savealldata(mat_data, meta_data, filepath)
+    savealldata(npy_data, meta_data, filepath)
+    return npy_data, meta_data, filepath
 
 def chunking(filepath,stepno,basefreq,window_width = None):
     stepno = stepno.astype(str)
     extnstr = f"{stepno}_chunk"
-    mat_data, meta_data, matfilepath,metafilepath = loadalldata(filepath)
+    npy_data, meta_data, npyfilepath,metafilepath = loadalldata(filepath)
     fs = meta_data["fs"]
     freq_min = meta_data["freq_range"][0]
     freq_max = meta_data["freq_range"][1]
@@ -645,23 +721,22 @@ def chunking(filepath,stepno,basefreq,window_width = None):
     meta_data["chunk_width"] = chunkWidth
     harmonics = np.arange(basefreq, freq_max, basefreq)
     harmonics = harmonics[harmonics <= 50]
-    chunk_data = np.zeros((int(np.floor(chunkWidth / freq_res)), mat_data.shape[1], len(harmonics)))
+    chunk_data = np.zeros((int(np.floor(chunkWidth / freq_res)), npy_data.shape[1], len(harmonics)))
     idx = np.where((freqs >= freq_min) & (freqs <= freq_max))[0]
     freq_idx = freqs[idx]
 
-    for chid in range(mat_data.shape[1]):
+    for chid in range(npy_data.shape[1]):
         for fhid in range(len(harmonics)):
             idx = np.where(
                 (freq_idx > (harmonics[fhid] - chunkWidth / 2)) & (freq_idx <= (harmonics[fhid] + chunkWidth / 2)))[0]
             # print(freq_idx[idx])
-            chunk_data[:, chid, fhid] = mat_data[idx, chid]
+            chunk_data[:, chid, fhid] = npy_data[idx, chid]
 
-    mat_data = chunk_data.copy()
+    npy_data = chunk_data.copy()
     filepath = filepath.with_name(extnstr + filepath.stem)
     cf.updatemetadataHistory(meta_data,extnstr)
-    savealldata(mat_data, meta_data, filepath)
-
-    return mat_data, meta_data, filepath
+    savealldata(npy_data, meta_data, filepath)
+    return npy_data, meta_data, filepath
 
 def selectingchunks(filepath, stepno,numharmonics = None):
     if numharmonics == None:
@@ -669,14 +744,14 @@ def selectingchunks(filepath, stepno,numharmonics = None):
 
     #So far, this selects only the first three harmonics of the baseline and oddball responses
     stepno = stepno.astype(str)
-    mat_data, meta_data, matfilepath,metafilepath = loadalldata(filepath)
-    bl_chunks = np.arange(4, mat_data.shape[2], 5)
-    bl_chunkmask = np.zeros(mat_data.shape[2], dtype=bool)
+    npy_data, meta_data, npyfilepath,metafilepath = loadalldata(filepath)
+    bl_chunks = np.arange(4, npy_data.shape[2], 5)
+    bl_chunkmask = np.zeros(npy_data.shape[2], dtype=bool)
     bl_chunkmask[bl_chunks] = "True"
     odd_chunkmask = ~bl_chunkmask
 
-    bl_data = mat_data[:, :, bl_chunkmask]
-    odd_data = mat_data[:, :, odd_chunkmask]
+    bl_data = npy_data[:, :, bl_chunkmask]
+    odd_data = npy_data[:, :, odd_chunkmask]
     # Select the first 3 for baseline and 12 chunks for oddball
     
     bl_data = bl_data[:, :, 0:numharmonics]
@@ -704,18 +779,18 @@ def selectingchunks(filepath, stepno,numharmonics = None):
 
 def sumofharmonics(filepath,stepno):
     stepno = stepno.astype(str)
-    mat_data, meta_data, matfilepath,metafilepath = loadalldata(filepath)
-    mat_data = np.sum(mat_data, axis=2)
+    npy_data, meta_data, npyfilepath,metafilepath = loadalldata(filepath)
+    npy_data = np.sum(npy_data, axis=2)
     filepath = filepath.with_name(f"{stepno}_sum " + filepath.stem)
     meta_data = cf.updatemetadataHistory(meta_data,f"{stepno}_sum")
     metafilepath = metafilepath.with_name(f"{stepno}_sum " + metafilepath.stem)
     cf.saveMetadata(meta_data,metafilepath)
-    np.save(matfilepath, mat_data)
-    print("Harmonics of mat_data is summed and the new shape is:", mat_data.shape)
+    np.save(npyfilepath, npy_data)
+    print("Harmonics of npy_data is summed and the new shape is:", npy_data.shape)
     print("\n")
-    savealldata(mat_data, meta_data, filepath)
-    return mat_data, meta_data, filepath
+    savealldata(npy_data, meta_data, filepath)
+    return npy_data, meta_data, filepath
 
-def baselinefiltering(filepath,stepno):
-    ## The logic and instructions of this is unclear, ask cedric and gloria about this -BP
+# def baselinefiltering(filepath,stepno):
+#The logic and instructions of this is unclear, ask cedric and gloria about this -BP
 
