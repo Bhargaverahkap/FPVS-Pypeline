@@ -2,7 +2,7 @@
 # here i want to create a set of functions that does all my preprocessing and post processing by simply inputting the mat and lw6 filepath and a configuration/constants file.
 # This way I can have a GUI where i want to and parallely get only the finished data files.
 
-def preprocessFPVSdata_phase1(npyfilepath = None, metafilepath = None, configfilepath = None):
+def preprocessFPVSdata_phase1(npyfilepath = None, metafilepath = None, electrodePath = None, configfilepath = None):
     """
     This function completes the preproccessing steps from loading,
     :param npyfilepath:
@@ -62,18 +62,19 @@ def preprocessFPVSdata_phase1(npyfilepath = None, metafilepath = None, configfil
     print("\n")
 
     #2. Electrode location change
-    electrodePath = Path(
-        "D:\Goffaux lab\letswave6_TR\\resources\electrodes\spherical_locations\\biosemi_locations_64_10-20_fixP9P10_add4.xyz")
+    if electrodePath == None:
+        electrodePath = Path(r"biosemi_locations_64_10-20_fixP9P10_add4.xyz")
+
     electrode_data = np.loadtxt(electrodePath, dtype=str, max_rows=68)
 
     Xcord = electrode_data[:, 1]
     Xcord = np.append(Xcord, ['0', '0', '0', '0',
-                              '0'])  # for some reason, there are 70 channels with only 68 entries so appending zeros
+                              '0'])  # for some reason, there are 73 channels with only 68 entries so appending zeros
     Xcord = Xcord.astype(float)
 
     Ycord = electrode_data[:, 2]
     Ycord = np.append(Ycord, ['0', '0', '0', '0',
-                              '0'])  # for some reason, there are 70 channels with only 68 entries so appending zeros
+                              '0'])  # for some reason, there are 73 channels with only 68 entries so appending zeros
     Ycord = Ycord.astype(float)
 
     Zcord = electrode_data[:, 3]
@@ -271,7 +272,7 @@ def preprocessFPVSdata_performICA(npyfilepath, metafilepath, ch_name = None):
 
     # Design Butterworth bandpass filter
     lowcut = 1
-    highcut = 10
+    highcut = 30
     order = 4
 
     fs = int((meta_data["fs"]))
@@ -633,7 +634,6 @@ def postprocessFPVSdata(event_label, folderpath):
     np.save(npyfilepath, npy_data)
     cf.saveMetadata(meta_data,metafilepath)
 
-
     print("data is merged based on epochs, saved as: ",npyfilepath)
     print("\n")
 
@@ -641,6 +641,7 @@ def postprocessFPVSdata(event_label, folderpath):
     fs  = meta_data["fs"]
     freq_min = 0
     freq_max = 50
+    n_timepoints = npy_data.shape[0]
     meta_data["freq_range"] = [freq_min, freq_max]
 
     freqs = np.fft.fftfreq(npy_data.shape[0], 1 / fs)
@@ -651,6 +652,7 @@ def postprocessFPVSdata(event_label, folderpath):
     for chid in range(npy_data.shape[1]):
         for epochid in range(npy_data.shape[2]):
             FFT_signal = np.abs(np.fft.fft((npy_data[:, chid, epochid])))
+            FFT_signal = (np.abs(FFT_signal) / n_timepoints)
             FFT_data[:, chid, epochid] = FFT_signal[idx]
 
     npy_data = FFT_data.copy()
@@ -660,7 +662,6 @@ def postprocessFPVSdata(event_label, folderpath):
     meta_data = cf.updatemetadataHistory(meta_data,"10_FFT")
     metafilepath = npyfilepath.with_name("10_FFT " + metafilepath.stem)
     cf.saveMetadata(meta_data,metafilepath)
-
 
     np.save(npyfilepath, npy_data)
 
@@ -777,3 +778,175 @@ def postprocessFPVSdata(event_label, folderpath):
     #Technically the pipeline is incomplete needs to be completed
 
     return odd_data, bl_data, oddnpyfilepath, blnpyfilepath
+
+def postprocessFPVSdata_1subject(event_label, folderpath):
+    #A lot of the meta_data updating still remains and is pending on this step
+    import numpy as np
+    import importlib
+    import cust_funcs as cf
+    importlib.reload(cf)
+
+    npy_data = np.load(folderpath.with_suffix('.npy'))
+    metafilepath = folderpath.with_suffix('.pkl')
+    meta_data = cf.loadMetadata(metafilepath)
+
+    print(npy_data.shape)
+    meta_data = {
+        "event_label": event_label,
+        "subjids": subj_merged,
+        "shape": npy_data.shape,
+        "size": npy_data.size,
+        "fs": 256,
+        "chanlocs": tempmeta_data["chanlocs"],
+        "history": {}
+    }
+    npyfilepath = folderpath / f"{event_label} MERGED.npy"
+    metafilepath = folderpath / f"{event_label} MERGED.pkl"
+    np.save(npyfilepath, npy_data)
+    cf.saveMetadata(meta_data,metafilepath)
+
+    print("data is merged based on epochs, saved as: ",npyfilepath)
+    print("\n")
+
+    #Frequency domain
+    fs  = meta_data["fs"]
+    freq_min = 0
+    freq_max = 50
+    n_timepoints = npy_data.shape[0]
+    meta_data["freq_range"] = [freq_min, freq_max]
+
+    freqs = np.fft.fftfreq(npy_data.shape[0], 1 / fs)
+    idx = np.where((freqs >= freq_min) & (freqs <= freq_max))[0]
+    freq_idx = freqs[idx]
+    FFT_data = np.zeros([len(freq_idx), npy_data.shape[1], npy_data.shape[2]])
+
+    for chid in range(npy_data.shape[1]):
+        for epochid in range(npy_data.shape[2]):
+            FFT_signal = np.abs(np.fft.fft((npy_data[:, chid, epochid])))
+            FFT_signal = (np.abs(FFT_signal) / n_timepoints)
+            FFT_data[:, chid, epochid] = FFT_signal[idx]
+
+    npy_data = FFT_data.copy()
+    del FFT_data
+    npyfilepath = npyfilepath.with_name("10_FFT " + npyfilepath.stem)
+
+    meta_data = cf.updatemetadataHistory(meta_data,"10_FFT")
+    metafilepath = npyfilepath.with_name("10_FFT " + metafilepath.stem)
+    cf.saveMetadata(meta_data,metafilepath)
+
+    np.save(npyfilepath, npy_data)
+
+    print("FFT data is saved as ", npyfilepath)
+    print("\n")
+
+    #11. averaging within trials
+    avg_data = np.mean(npy_data, axis=2)
+    npy_data = avg_data.copy()
+
+    npyfilepath = npyfilepath.with_name("11_avg " + npyfilepath.stem)
+    np.save(npyfilepath, npy_data)
+
+    meta_data = cf.updatemetadataHistory(meta_data,"11_avg")
+    metafilepath = metafilepath.with_name("11_avg " + metafilepath.stem)
+    metafilepath = metafilepath.with_suffix(".pkl")
+
+    cf.saveMetadata(meta_data,metafilepath)
+
+
+    print("averaged data is saved as ", npyfilepath)
+    print("\n")
+
+    ## Chunking
+    freq_res = (freq_max - freq_min) / npy_data.shape[0]
+    window_width = .4
+    chunkWidth = window_width + freq_res
+    meta_data["chunk_width"] = chunkWidth
+    harmonics = np.arange(1.2, 50, 1.2)
+    harmonics = harmonics[harmonics <= 50]
+    chunk_data = np.zeros((int(np.floor(chunkWidth / freq_res)), npy_data.shape[1], len(harmonics)))
+    idx = np.where((freqs >= freq_min) & (freqs <= freq_max))[0]
+    freq_idx = freqs[idx]
+
+    for chid in range(npy_data.shape[1]):
+        for fhid in range(len(harmonics)):
+            idx = np.where(
+                (freq_idx > (harmonics[fhid] - chunkWidth / 2)) & (freq_idx <= (harmonics[fhid] + chunkWidth / 2)))[0]
+            # print(freq_idx[idx])
+            chunk_data[:, chid, fhid] = npy_data[idx, chid]
+
+    npy_data = chunk_data.copy()
+    npyfilepath = npyfilepath.with_name("12_chunk " + npyfilepath.stem)
+    np.save(npyfilepath, npy_data)
+
+    meta_data = cf.updatemetadataHistory(meta_data,"12_chunk")
+    metafilepath = metafilepath.with_name("12_chunk " + metafilepath.stem)
+    cf.saveMetadata(meta_data,metafilepath)
+
+
+    print("data is chunked at frequencies of interest and saved as ", npyfilepath)
+    print("\n")
+
+    #selecting chunks for the data
+    bl_chunks = np.arange(4, npy_data.shape[2], 5)
+    bl_chunkmask = np.zeros(npy_data.shape[2], dtype=bool)
+    bl_chunkmask[bl_chunks] = "True"
+    odd_chunkmask = ~bl_chunkmask
+
+    bl_data = npy_data[:, :, bl_chunkmask]
+    odd_data = npy_data[:, :, odd_chunkmask]
+
+    # Select the first 3 for baseline and 12 chunks for oddball
+    blchunkselect = 3
+    oddchunkselect = 3
+    bl_data = bl_data[:, :, 0:blchunkselect]
+    odd_data = odd_data[:, :, 0:oddchunkselect]
+
+    meta_data_bl = meta_data.copy()
+    meta_data_odd = meta_data.copy()
+
+    meta_data_bl["nChunks"] = blchunkselect
+    meta_data_bl["eventType"] = "Baseline"
+
+    meta_data_odd["nChunks"] = oddchunkselect
+    meta_data_odd["eventType"] = "Oddball"
+
+    meta_data_bl = cf.updatemetadataHistory(meta_data_bl,"13_baseline")
+    meta_data_odd = cf.updatemetadataHistory(meta_data_odd, "13_oddball")
+    blnpyfilepath = npyfilepath.with_name("13_baseline " + npyfilepath.stem)
+    np.save(blnpyfilepath, bl_data)
+    blmetadatafilepath = metafilepath.with_name("13_baseline " + metafilepath.stem)
+    cf.saveMetadata(meta_data_bl,blmetadatafilepath)
+
+    print("baseline data saved, size of the data in ",blnpyfilepath)
+    print("\n")
+
+    oddnpyfilepath = npyfilepath.with_name("13_oddball " + npyfilepath.stem)
+    np.save(oddnpyfilepath, odd_data)
+    oddmetafilepath = metafilepath.with_name("13_oddball " + metafilepath.stem)
+    cf.saveMetadata(meta_data_odd,oddmetafilepath)
+    print("oddball data saved, size of the data in ",oddnpyfilepath)
+    print("\n")
+
+    ## Sum of harmonics
+    bl_data = np.sum(bl_data, axis=2)
+    odd_data = np.sum(odd_data, axis=2)
+
+    blnpyfilepath = blnpyfilepath.with_name("14_sum " + blnpyfilepath.stem)
+    meta_data_bl = cf.updatemetadataHistory(meta_data_bl,"14_sum")
+    blmetadatafilepath = blmetadatafilepath.with_name("14_sum " + blmetadatafilepath.stem)
+    cf.saveMetadata(meta_data_bl,blmetadatafilepath)
+    np.save(blnpyfilepath, bl_data)
+    print("Harmonics of bl_data is summed and the new shape is:", bl_data.shape)
+    print("\n")
+
+    oddnpyfilepath = oddnpyfilepath.with_name("14_sum " + oddnpyfilepath.stem)
+    oddmetafilepath = oddmetafilepath.with_name("14_sum " + oddmetafilepath.stem)
+    np.save(oddnpyfilepath, odd_data)
+    meta_data_odd = cf.updatemetadataHistory(meta_data_odd, "14_sum")
+    cf.saveMetadata(meta_data_odd,oddmetafilepath)
+    print("Harmonics of odd_data is summed and the new shape is:", odd_data.shape)
+    print("\n")
+    #Technically the pipeline is incomplete needs to be completed
+
+    return odd_data, bl_data, oddnpyfilepath, blnpyfilepath
+# def showmesummaryplot2(npy_data, meta_data):

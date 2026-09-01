@@ -139,102 +139,104 @@ def updatemetadataHistory(meta_data,step_prefix):
     meta_data["history"][step_prefix] = current_state
     return meta_data
 
-def showmeFFT(signal,fs,freqlim=None,pltsize=None,label=None,titlestr=None,epochid=None):
-    import numpy as np
-    import matplotlib.pyplot as plt
-    if epochid is None:
-        epochid = 0
+# These functions have become obselete now
+# def showmeFFT(signal,fs,freqlim=None,pltsize=None,label=None,titlestr=None,epochid=None):
+#     import numpy as np
+#     import matplotlib.pyplot as plt
+#     if epochid is None:
+#         epochid = 0
 
-    if len(signal.shape) > 1:
-        signal = np.squeeze(signal)
+#     if len(signal.shape) > 1:
+#         signal = np.squeeze(signal)
 
-    if titlestr is None:
-        titlestr = [f"FFT of signal for {label} in epoch {epochid}"]
+#     if titlestr is None:
+#         titlestr = [f"FFT of signal for {label} in epoch {epochid}"]
 
-    if freqlim is None:
-        freqlim = [0, fs // 2]
+#     if freqlim is None:
+#         freqlim = [0, fs // 2]
 
-    if pltsize is None:
-        pltsize = [12, 3]
+#     if pltsize is None:
+#         pltsize = [12, 3]
 
-    # Converting signal from sample to freq domain
-    FFT_vals=np.abs(np.fft.fft(signal))
-    freqs=np.fft.fftfreq(len(FFT_vals),1/fs)
-    idx = (freqs >= freqlim[0]) & (freqs <= freqlim[1])
+#     n_timepoints = int(len(signal))
+#     # Converting signal from sample to freq domain
+#     FFT_vals=np.abs(np.fft.fft(signal))
+#     FFT_vals = (np.abs(FFT_vals) / n_timepoints)
+#     freqs=np.fft.fftfreq(len(FFT_vals),1/fs)
+#     idx = (freqs >= freqlim[0]) & (freqs <= freqlim[1])
 
-    #actual plotting
-    plt.figure(figsize=pltsize)
-    markerline, stemlines, baseline = plt.stem(freqs[idx], FFT_vals[idx])
-    markerline.set_markersize(1)
-    plt.setp(stemlines, linewidth= 1)
-    plt.title(titlestr)
-    plt.xlabel("Freq [Hz]")
-    ticks = np.arange(1.2*(freqlim[0]//1.2), freqlim[1] + 1.2, 1.2)  # include endpoint
-    plt.xticks(ticks,fontsize=8)
-    plt.ylabel("abs Amp")
-    legendstr = [f"epoch:{epochid}"]
-    plt.legend(legendstr,loc="upper right")
-    plt.title(titlestr)
-    plt.show()
+#     #actual plotting
+#     plt.figure(figsize=pltsize)
+#     markerline, stemlines, baseline = plt.stem(freqs[idx], FFT_vals[idx])
+#     markerline.set_markersize(1)
+#     plt.setp(stemlines, linewidth= 1)
+#     plt.title(titlestr)
+#     plt.xlabel("Freq [Hz]")
+#     ticks = np.arange(1.2*(freqlim[0]//1.2), freqlim[1] + 1.2, 1.2)  # include endpoint
+#     plt.xticks(ticks,fontsize=8)
+#     plt.ylabel("abs Amp")
+#     legendstr = [f"epoch:{epochid}"]
+#     plt.legend(legendstr,loc="upper right")
+#     plt.title(titlestr)
+#     plt.show()
 
-def showmeSignal(signal,duration=None,pltsize=None,titlestr=None,epochid=None):
-    import numpy as np
-    import matplotlib.pyplot as plt
+# def showmeSignal(signal,duration=None,pltsize=None,titlestr=None,epochid=None):
+#     import numpy as np
+#     import matplotlib.pyplot as plt
 
-    if len(signal.shape)>1:
-        signal = np.squeeze(signal)
+#     if len(signal.shape)>1:
+#         signal = np.squeeze(signal)
 
-    if epochid is None:
-        epochid = 0
+#     if epochid is None:
+#         epochid = 0
 
-    if duration is None:
-        duration = np.linspace(0,len(signal)-1,len(signal),dtype=int)
+#     if duration is None:
+#         duration = np.linspace(0,len(signal)-1,len(signal),dtype=int)
 
-    if pltsize is None:
-        pltsize = [12, 4]
+#     if pltsize is None:
+#         pltsize = [12, 4]
 
-    if titlestr is None:
-        titlestr = "Channel activation"
+#     if titlestr is None:
+#         titlestr = "Channel activation"
 
-    #actual plotting
-    plt.figure(figsize=pltsize)
-    plt.plot(duration,signal,lw=1)
-    plt.title(titlestr)
-    plt.xlabel("Samples")
-    plt.ylabel("amplitude")
-    legendstr = [f"epoch:{epochid}"]
-    if len(signal.shape) >1:
-        legend_labels = [f"line {i}" for i in range(signal.shape[1])]
+#     #actual plotting
+#     plt.figure(figsize=pltsize)
+#     plt.plot(duration,signal,lw=1)
+#     plt.title(titlestr)
+#     plt.xlabel("Samples")
+#     plt.ylabel("amplitude")
+#     legendstr = [f"epoch:{epochid}"]
+#     if len(signal.shape) >1:
+#         legend_labels = [f"line {i}" for i in range(signal.shape[1])]
 
-    if len(signal.shape)==1:
-        plt.legend(legendstr,loc="upper right")
-    else:
-        plt.legend(legend_labels,loc="upper left", bbox_to_anchor=(1, 1))
-        plt.subplots_adjust(right=0.75)
+#     if len(signal.shape)==1:
+#         plt.legend(legendstr,loc="upper right")
+#     else:
+#         plt.legend(legend_labels,loc="upper left", bbox_to_anchor=(1, 1))
+#         plt.subplots_adjust(right=0.75)
 
-    plt.figure
-    plt.show()
+#     plt.figure
+#     plt.show()
 
-def showmeSummaryPlot(signal,fs,chname,subjid,pltsize=None,freqlim=None,epochid=None):
-    import numpy as np
-    import matplotlib.pyplot as plt
-    if len(signal.shape) > 1:
-        signal = np.squeeze(signal)
+# def showmeSummaryPlot(signal,fs,chname,subjid,pltsize=None,freqlim=None,epochid=None):
+#     import numpy as np
+#     if len(signal.shape) > 1:
+#         signal = np.squeeze(signal)
 
-    if epochid is None:
-        epochid = 0
+#     if epochid is None:
+#         epochid = 0
 
-    if freqlim is None:
-        freqlim = [0.1, 20]
+#     if freqlim is None:
+#         freqlim = [0.1, 20]
 
-    if pltsize is None:
-        pltsize = [12, 3]
+#     if pltsize is None:
+#         pltsize = [12, 3]
 
-    sigtitlestr = f"amp vs samples for sub:{subjid} chid:{chname}"
-    ffttitlestr = f"FFT spectrum for sub:{subjid} chid:{chname}"
+#     sigtitlestr = f"amp vs samples for sub:{subjid} chid:{chname}"
+#     ffttitlestr = f"FFT spectrum for sub:{subjid} chid:{chname}"
 
-    showmeSignal(signal,titlestr=sigtitlestr,epochid=epochid,pltsize=pltsize)
-    showmeFFT(signal,fs,freqlim=freqlim,pltsize=pltsize,titlestr=ffttitlestr,epochid=epochid)
+#     showmeSignal(signal,titlestr=sigtitlestr,epochid=epochid,pltsize=pltsize)
+#     showmeFFT(signal,fs,freqlim=freqlim,pltsize=pltsize,titlestr=ffttitlestr,epochid=epochid)
 
 def zscoreChunks(FFT, freqs, f0=None, window=None, exclude_bins=1, buffer=None):
     #funciton under construction
@@ -297,77 +299,78 @@ def givemeNNearestNeighbour(meta_data,chnameid):
 
     return sorted_idx[1:],sorted_labels[1:]
 
-def showmeSignalUI(npy_data,meta_data,xlim=None,ylim=None):
-    import ipywidgets as widgets
-    from IPython.display import display
-    import matplotlib.pyplot as plt
-    import numpy as np
+# This function is also obselete as there is a newer Generation of function (showmesummaryplot in FPyVS_applycation)
+# def showmeSignalUI(npy_data,meta_data,xlim=None,ylim=None):
+#     import ipywidgets as widgets
+#     from IPython.display import display
+#     import matplotlib.pyplot as plt
+#     import numpy as np
 
-    epoch = [f"epoch{i}" for i in range(npy_data.shape[2])]
-    labels = np.squeeze(meta_data["chanlocs"]["labels"])
-    labels = labels.astype(str)
+#     epoch = [f"epoch{i}" for i in range(npy_data.shape[2])]
+#     labels = np.squeeze(meta_data["chanlocs"]["labels"])
+#     labels = labels.astype(str)
 
-    # 1. Generate Dummy Data (40 Epochs, 60 Series, 100 Timepoints)
-    # Shape: (Epochs, Series, Time)
+#     # 1. Generate Dummy Data (40 Epochs, 60 Series, 100 Timepoints)
+#     # Shape: (Epochs, Series, Time)
 
-    data_matrix = np.moveaxis(npy_data,0,-1) #moves first axis to the last
-    print(data_matrix.shape)
-    # 2. The Plotting Function
-    def plot_data(epoch_idx, selected_series):
-        plt.figure(figsize=(9, 5))
+#     data_matrix = np.moveaxis(npy_data,0,-1) #moves first axis to the last
+#     print(data_matrix.shape)
+#     # 2. The Plotting Function
+#     def plot_data(epoch_idx, selected_series):
+#         plt.figure(figsize=(9, 5))
 
-        if not selected_series:
-            plt.text(0.5, 0.5, "Select series from the list", ha='center', va='center')
-        else:
-            for s_idx in selected_series:
-                series_data = data_matrix[s_idx, epoch_idx,  :]
-                plt.plot(series_data, label=labels[s_idx])
+#         if not selected_series:
+#             plt.text(0.5, 0.5, "Select series from the list", ha='center', va='center')
+#         else:
+#             for s_idx in selected_series:
+#                 series_data = data_matrix[s_idx, epoch_idx,  :]
+#                 plt.plot(series_data, label=labels[s_idx])
 
-            # plt.title(f"Epoch {epoch_idx} | Comparing {len(selected_series)} Series")
-            plt.xlabel("Time Step")
-            plt.ylabel("Value")
-            plt.legend(loc='upper left', bbox_to_anchor=(1, 1))
-            plt.grid(True, linestyle='--', alpha=0.6)
-            if xlim is not None:
-                plt.xlim(-abs(xlim), abs(xlim))
-            if ylim is not None:
-                plt.ylim(ylim[0],ylim[1])
+#             # plt.title(f"Epoch {epoch_idx} | Comparing {len(selected_series)} Series")
+#             plt.xlabel("Time Step")
+#             plt.ylabel("Value")
+#             plt.legend(loc='upper left', bbox_to_anchor=(1, 1))
+#             plt.grid(True, linestyle='--', alpha=0.6)
+#             if xlim is not None:
+#                 plt.xlim(-abs(xlim), abs(xlim))
+#             if ylim is not None:
+#                 plt.ylim(ylim[0],ylim[1])
 
-        plt.show()
+#         plt.show()
 
-    # 3. The Widgets
-    # Slider for "scrolling" through 40 epochs
-    epoch_slider = widgets.IntSlider(
-        value=0, min=0, max=npy_data.shape[2]-1, step=1,
-        description='Epoch:',
-        continuous_update=True,  # Update plot while dragging
-        layout={'width': '1000px'}
-    )
+#     # 3. The Widgets
+#     # Slider for "scrolling" through 40 epochs
+#     epoch_slider = widgets.IntSlider(
+#         value=0, min=0, max=npy_data.shape[2]-1, step=1,
+#         description='Epoch:',
+#         continuous_update=True,  # Update plot while dragging
+#         layout={'width': '1000px'}
+#     )
 
-    # Multi-select for the 60 series
-    series_selector = widgets.SelectMultiple(
-        options=[(labels[i], i) for i in range(npy_data.shape[1])],
-        value=[0, 1, 2, 3],  # Default selection (first 4)
-        description='Channel:',
-        layout={'height': '550px', 'width': '150px'}
-    )
+#     # Multi-select for the 60 series
+#     series_selector = widgets.SelectMultiple(
+#         options=[(labels[i], i) for i in range(npy_data.shape[1])],
+#         value=[0, 1, 2, 3],  # Default selection (first 4)
+#         description='Channel:',
+#         layout={'height': '550px', 'width': '150px'}
+#     )
 
-    # 4. Linking it all together
-    out = widgets.interactive_output(
-        plot_data,
-        {'epoch_idx': epoch_slider, 'selected_series': series_selector}
-    )
+#     # 4. Linking it all together
+#     out = widgets.interactive_output(
+#         plot_data,
+#         {'epoch_idx': epoch_slider, 'selected_series': series_selector}
+#     )
 
-    # 5. Organizing the Layout
-    # Putting the epoch slider on top and the list next to the plot
-    ui = widgets.VBox([
-        epoch_slider,
-        widgets.HBox([series_selector, out])
-    ])
+#     # 5. Organizing the Layout
+#     # Putting the epoch slider on top and the list next to the plot
+#     ui = widgets.VBox([
+#         epoch_slider,
+#         widgets.HBox([series_selector, out])
+#     ])
 
-    display(ui)
+#     display(ui)
 
-def showmeSignalUIandInterp(npy_data, meta_data, xlim=None, ylim=None):
+def showmeSignalUIandInterp(npy_data, meta_data, xlim=None, ylim=None): #discarded function but kept incase someone wants to use it for parts
     import ipywidgets as widgets
     from IPython.display import display
     import matplotlib.pyplot as plt
@@ -701,15 +704,6 @@ def showme3DTopomap(activations,meta_data, title="3D EEG Topography"):
         name='Electrodes'
     ))
 
-    # Add a simple 'Nose' marker for orientation (at +Y)
-    # fig.add_trace(go.Scatter3d(
-    #     x=[0], y=[1.05], z=[0],
-    #     mode='text'
-    #     text=["FRONT"],
-    #     textfont=dict(color="black", size=10),
-    #     name='Orientation'
-    # ))
-
     # 5. Scene Formatting
     fig.update_layout(
         title=title,
@@ -1040,7 +1034,7 @@ def showmeSTFTSpectrogram(npy_data, chid, fs = 256 , titlestr = None,freqlim = N
     if binsize == None:
         binsize = 512
 
-    chsignal = npy_data[ :, chid]
+    chsignal = npy_data[:, chid]
     if isoverlap:
         f, t, Sxx = signal.spectrogram(chsignal, fs,nperseg=binsize,noverlap=binsize/2)
     else:
@@ -1048,12 +1042,13 @@ def showmeSTFTSpectrogram(npy_data, chid, fs = 256 , titlestr = None,freqlim = N
 
     freqidx = np.where((f>=freqlim[0]) & (f<=freqlim[1]))[0]
     plt.figure(figsize=(10, 5))
-    plt.pcolormesh(t, f[freqidx], 10 * np.log10(Sxx[freqidx,:]), shading='gouraud' , cmap='RdBu_r')
+    plt.pcolormesh(t, f[freqidx], 10 * np.log10(Sxx[freqidx,:]) , cmap='RdBu_r')
     plt.ylabel('Frequency [Hz]')
     plt.xlabel('Time [nsamples]')
     plt.title(titlestr)
     plt.colorbar(label='Power[dB]')
     plt.show()
+    return f,t
 
 def showmeMWSpectrogram(npy_data, chid, epochid , fs = 256 , titlestr = None, freqlim = None, binsize = None,isoverlap = None):
     import numpy as np
