@@ -12,3 +12,6 @@ ipywidgets
 ipython
 jupyterlab
 nbformat
+
+# Tk (tkinter_version build) ships with Python on Windows and macOS.
+# On Linux install it with: sudo apt install python3-tk
