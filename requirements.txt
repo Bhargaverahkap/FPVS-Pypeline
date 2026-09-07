@@ -1,0 +1,14 @@
+# Python libraries needed to run FPyVS_appylication.py, FPVS_pycage.py and cust_funcs.py
+numpy
+scipy
+matplotlib
+mne
+h5py
+plotly
+trimesh
+pillow
+networkx
+ipywidgets
+ipython
+jupyterlab
+nbformat
