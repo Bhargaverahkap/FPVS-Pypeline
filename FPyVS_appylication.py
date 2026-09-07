@@ -443,7 +443,7 @@ def overlayICAondata(filepath, ica_data):
     cf.showmeICAoverlayedondata(npy_data, ica_data, labels=labels,subjid=subjid)
 
 def applyICA(filepath, ica, raw, rmidx):
-    npy_data, meta_data = loadalldata(filepath)
+    npy_data, meta_data, npyfilepath, metafilepath = loadalldata(filepath)
     print("Removing ICA components:", rmidx)
     ica.exclude = rmidx
     raw_clean = ica.apply(raw.copy())
