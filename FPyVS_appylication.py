@@ -442,6 +442,18 @@ def overlayICAondata(filepath, ica_data):
     subjid = npyfilepath.stem.split()[-1]
     cf.showmeICAoverlayedondata(npy_data, ica_data, labels=labels,subjid=subjid)
 
+def performandoverlayICA(filepath, ch_name = None):
+    """Run ICA and immediately overlay the components on the raw data.
+
+    Convenience wrapper that chains performICA and overlayICAondata so the
+    fitting and the visual inspection happen in one call. Returns exactly what
+    performICA returns, so the result can be handed straight to applyICA.
+    """
+    ica, raw, ica_data, eog_indices = performICA(filepath, ch_name = ch_name)
+    print("Suspected EOG components:", eog_indices)
+    overlayICAondata(filepath, ica_data)
+    return ica, raw, ica_data, eog_indices
+
 def applyICA(filepath, ica, raw, rmidx):
     npy_data, meta_data, npyfilepath, metafilepath = loadalldata(filepath)
     print("Removing ICA components:", rmidx)
