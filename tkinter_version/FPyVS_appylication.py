@@ -1,3 +1,5 @@
+# Tkinter build. The Jupyter build of this module lives in the repository root.
+# Only the interactive viewers differ: ipywidgets there, Tkinter windows here.
 # Hello, this script is in service of the resulting (GUI based) application that will be eventually made.
 # Add all steps/functionalities here as a function with no dependencies on FPVS_pycage
 
@@ -7,14 +9,16 @@ import mne
 from mne.preprocessing import ICA
 import importlib
 import cust_funcs as cf
-import ipywidgets as widgets
-from IPython.display import display
 import matplotlib.pyplot as plt
 from pathlib import Path
 import h5py
 from functools import partial
 import matplotlib.ticker as ticker
 importlib.reload(cf)
+
+from pathlib import Path as _Path
+# Data assets (electrode locations, head meshes) stay in the repository root.
+_ASSET_DIR = _Path(__file__).resolve().parent.parent
 
 def loadalldata(filepath):
     metafilepath = filepath.with_suffix(".pkl")
@@ -163,7 +167,7 @@ def renamechannels(filepath,stepno, targets = None, replacements = None):
 def electrodelocationchange(filepath, stepno, electrodelocationfilepath=None):
 
     if electrodelocationfilepath == None:
-        electrodelocationfilepath = r"biosemi_locations_64_10-20_fixP9P10_add4.xyz"
+        electrodelocationfilepath = str(_ASSET_DIR / "biosemi_locations_64_10-20_fixP9P10_add4.xyz")
 
     
     extn_str = f"{stepno}_chanlocs "
@@ -1090,277 +1094,147 @@ def MEbaselinefiltering(filepath,stepno):
     savealldata(npy_data, meta_data, filepath)
     return npy_data,meta_data, filepath
 
-def showmesummaryplot(npy_data, meta_data):
+def _summaryplot(npy_data, meta_data, use_stem = False, epoch_offset = 0):
+    """Shared body of showmesummaryplot / showmesummaryplot_alt for the Tkinter build.
+
+    Same controls as the Jupyter build - domain switch, frequency range, channel
+    list and (for 3D data) an epoch list - drawn with Tk widgets instead of
+    ipywidgets. use_stem picks the stem-plot flavour used by the _alt variant.
+    """
+    import _tk_helpers as tkh
+    import tkinter as tk
+    from tkinter import ttk
+
     fs = meta_data["fs"]
     labels = np.squeeze(meta_data["chanlocs"]["labels"])
     labels = labels.astype(str)
     n_timepoints = npy_data.shape[0]
+    is3d = len(npy_data.shape) == 3
 
-    # 1. New Frequency Range Widget
-    freq_slider = widgets.IntRangeSlider(
-        value=[0, 20],
-        min=0,
-        max=int(fs / 2),  # Nyquist limit
-        step=1,
-        description='Freq (Hz):',
-        continuous_update=False,  # Updates plot only when you release the mouse
-        layout={'width': '300px'}
-    )
+    win = tkh.PlotWindow("Summary plot")
 
-    #New and improved plotting function, handles both the 2D and 3D npy_data
-    def plot_data(domain, selected_series, freq_range, epoch_idx=0):
-        plt.figure(figsize=(10, 5))
-    
+    domain = tk.StringVar(value='Time')
+    freq_min = tk.IntVar(value=0)
+    freq_max = tk.IntVar(value=20)
+    nyquist = int(fs / 2)  # Nyquist limit
+
+    def plot_data(*_):
+        ax = win.clear()
+        selected_series = tkh.selection(series_selector)
+        epoch_idx = (tkh.selection(epoch_selector) or [0])[0] if is3d else 0
+
         if not selected_series:
-            plt.text(0.5, 0.5, "Select channels from the list", ha='center', va='center')
-            plt.show()
+            ax.text(0.5, 0.5, "Select channels from the list", ha='center', va='center')
+            win.draw()
             return
-    
+
         time_vector = np.arange(n_timepoints) / fs
-    
+
         for s_idx in selected_series:
             # Safely handle both 2D and 3D shapes
-            if len(npy_data.shape) == 3:
+            if is3d:
                 series_data = npy_data[:, s_idx, epoch_idx]
             else:
                 series_data = npy_data[:, s_idx]
-            
-            if domain == 'Time':
-                plt.plot(time_vector, series_data, label=labels[s_idx])
-                plt.xlabel("Time (s)")
-                plt.ylabel(r"Amplitude ($\mu$V)")
-                
-            elif domain == 'Frequency':
+
+            if domain.get() == 'Time':
+                ax.plot(time_vector, series_data, label=labels[s_idx])
+                ax.set_xlabel("Time (s)")
+                ax.set_ylabel(r"Amplitude ($\mu$V)")
+
+            elif domain.get() == 'Frequency':
                 # Compute FFT
                 fft_vals = np.fft.rfft(series_data)
                 fft_freqs = np.fft.rfftfreq(n_timepoints, d=1/fs)
                 scaled_fft_magnitude = (np.abs(fft_vals) / n_timepoints) * 2
 
-                # Get limits from slider / configuration
-                freq_min, freq_max = freq_range
-                idx = np.where((fft_freqs >= freq_min) & (fft_freqs <= freq_max))
+                # Get limits from the frequency boxes
+                fmin, fmax = int(freq_min.get()), int(freq_max.get())
+                idx = np.where((fft_freqs >= fmin) & (fft_freqs <= fmax))
 
-                plt.plot(fft_freqs[idx], scaled_fft_magnitude[idx], label=labels[s_idx])
-                plt.xlabel("Frequency (Hz)")
-                plt.ylabel(r"Magnitude ($\mu$V)")
-                plt.xlim(freq_min, freq_max)
+                if use_stem:
+                    # Automatically grab a unique color for this specific channel
+                    color_cycle = plt.rcParams['axes.prop_cycle'].by_key()['color']
+                    channel_color = color_cycle[s_idx % len(color_cycle)]
+                    stems = ax.stem(
+                        fft_freqs[idx],
+                        scaled_fft_magnitude[idx],
+                        label=labels[s_idx],
+                        linefmt='-',                    # Solid line style
+                        markerfmt='o',                  # Circle marker style
+                        basefmt=' ',                    # Keeps baseline hidden
+                    )
+                    plt.setp(stems.stemlines, color=channel_color)
+                    plt.setp(stems.markerline, color=channel_color)
+                else:
+                    ax.plot(fft_freqs[idx], scaled_fft_magnitude[idx], label=labels[s_idx])
 
-        plt.legend(loc='upper left', bbox_to_anchor=(1, 1))
-        plt.grid(True, linestyle='--', alpha=0.6)
+                ax.set_xlabel("Frequency (Hz)")
+                ax.set_ylabel(r"Magnitude ($\mu$V)")
+                ax.set_xlim(fmin, fmax)
+
+        ax.legend(loc='upper left', bbox_to_anchor=(1, 1))
+        ax.grid(True, linestyle='--', alpha=0.6)
         # Apply the 1.2 Hz tick marks specifically when in the Frequency domain
-        if domain == 'Frequency':
-            plt.gca().xaxis.set_major_locator(ticker.MultipleLocator(1.2))
-            # Rotate labels slightly if they crowd each other at wide ranges
-            plt.xticks(rotation=45) 
-            
-        title_suffix = f" | Epoch: {epoch_idx}" if len(npy_data.shape) == 3 else ""
-        plt.title(f"Domain: {domain}{title_suffix}")
-        plt.show()
-            
-    # 3. Base UI Widgets
-    domain_switch = widgets.ToggleButtons(
-        options=['Time', 'Frequency'],
-        value='Time',
-        description='Domain:',
-        button_style='info'
-    )
+        if domain.get() == 'Frequency':
+            ax.xaxis.set_major_locator(ticker.MultipleLocator(1.2))
+            for tick in ax.get_xticklabels():
+                tick.set_rotation(45)
 
-    series_selector = widgets.SelectMultiple(
-        options=[(labels[i], i) for i in range(npy_data.shape[1])],
-        value=[0, 1, 2, 3],  
-        description='Ch Name:',
-        layout={'height': '225px' if len(npy_data.shape) == 3 else '400px', 'width': '150px'}
-    )
+        title_suffix = f" | Epoch: {epoch_idx + epoch_offset}" if is3d else ""
+        ax.set_title(f"Domain: {domain.get()}{title_suffix}")
+        win.draw()
 
-    # 4. Handle 2D vs 3D Layout Setup
-    widget_dict = {
-        'domain': domain_switch,
-        'selected_series': series_selector,
-        'freq_range': freq_slider
-    }
-
-    if len(npy_data.shape) == 3:
-        epoch_selector = widgets.Select(
-            options=[(f"Ep: {i}", i) for i in range(npy_data.shape[2])],
-            value=0,
-            description='Epoch:',
-            layout={'height': '225px', 'width': '150px'}
-        )
-        widget_dict['epoch_idx'] = epoch_selector
-        controls = widgets.VBox([epoch_selector, series_selector])
-    else:
-        controls = widgets.VBox([series_selector])
-
-    out = widgets.interactive_output(plot_data, widget_dict)
-
-        # 5. Dynamic Slider Visibility (Shows slider ONLY during Frequency Mode)
-    def toggle_slider_visibility(change):
-        if change['new'] == 'Frequency':
-            freq_slider.layout.display = 'block'
+    def toggle_freq_visibility(*_):
+        # Frequency boxes are only meaningful in the Frequency domain
+        if domain.get() == 'Frequency':
+            freq_box.pack(anchor="w", pady=(4, 0))
         else:
-            freq_slider.layout.display = 'none'
+            freq_box.pack_forget()
+        plot_data()
 
-    domain_switch.observe(toggle_slider_visibility, names='value')
-    freq_slider.layout.display = 'none'  # Hidden by default because default is 'Time'
+    ttk.Label(win.controls, text="Domain:").pack(anchor="w")
+    for option in ('Time', 'Frequency'):
+        ttk.Radiobutton(win.controls, text=option, value=option,
+                        variable=domain, command=toggle_freq_visibility).pack(anchor="w")
 
-    # 6. Render Layout
-    # Create a small spacer to separate the switch and the slider nicely
-    spacer = widgets.Box(layout=widgets.Layout(width='40px'))
+    freq_box = ttk.Frame(win.controls)
+    ttk.Label(freq_box, text="Freq (Hz): min / max").grid(row=0, column=0, columnspan=2, sticky="w")
+    tk.Spinbox(freq_box, from_=0, to=nyquist, textvariable=freq_min, width=6,
+               command=plot_data).grid(row=1, column=0)
+    tk.Spinbox(freq_box, from_=0, to=nyquist, textvariable=freq_max, width=6,
+               command=plot_data).grid(row=1, column=1)
 
-    # CHANGE THIS: Use HBox instead of VBox to place them side by side
-    top_bar = widgets.HBox([domain_switch, spacer, freq_slider])
-    
-    main_layout = widgets.VBox([
-        top_bar, 
-        widgets.HBox([controls, out])
-    ])
-    display(main_layout)
+    epoch_selector = None
+    if is3d:
+        epoch_selector = tkh.make_listbox(
+            win.controls,
+            "Epoch",
+            [f"Ep: {i + epoch_offset}" for i in range(npy_data.shape[2])],
+            height=8,
+            multiple=False,
+            default=(0,),
+        )
+        epoch_selector.bind("<<ListboxSelect>>", plot_data)
+
+    series_selector = tkh.make_listbox(
+        win.controls,
+        "Ch Name",
+        [labels[i] for i in range(npy_data.shape[1])],
+        height=10 if is3d else 18,
+        default=(0, 1, 2, 3),
+    )
+    series_selector.bind("<<ListboxSelect>>", plot_data)
+
+    plot_data()
+    win.wait()
+
+def showmesummaryplot(npy_data, meta_data):
+    _summaryplot(npy_data, meta_data, use_stem = False, epoch_offset = 0)
 
 def showmesummaryplot_alt(npy_data, meta_data):
     """
-    fs: Sampling frequency in Hz (default 1000 Hz) to scale the frequency axis.
+    Same viewer as showmesummaryplot, but the frequency domain is drawn as a stem
+    plot and epochs are numbered from 1.
     """
-    fs = meta_data["fs"]
-    labels = np.squeeze(meta_data["chanlocs"]["labels"])
-    labels = labels.astype(str)
-    n_timepoints = npy_data.shape[0]
-
-    # 1. New Frequency Range Widget
-    freq_slider = widgets.IntRangeSlider(
-        value=[0, 20],
-        min=0,
-        max=int(fs / 2),  # Nyquist limit
-        step=1,
-        description='Freq (Hz):',
-        continuous_update=False,  # Updates plot only when you release the mouse
-        layout={'width': '300px'}
-    )
-
-    #New and improved plotting function, handles both the 2D and 3D npy_data
-    def plot_data(domain, selected_series, freq_range, epoch_idx=0):
-        plt.figure(figsize=(10, 5))
-    
-        if not selected_series:
-            plt.text(0.5, 0.5, "Select channels from the list", ha='center', va='center')
-            plt.show()
-            return
-    
-        time_vector = np.arange(n_timepoints) / fs
-    
-        for s_idx in selected_series:
-            # Safely handle both 2D and 3D shapes
-            if len(npy_data.shape) == 3:
-                series_data = npy_data[:, s_idx, epoch_idx]
-            else:
-                series_data = npy_data[:, s_idx]
-            
-            if domain == 'Time':
-                plt.plot(time_vector, series_data, label=labels[s_idx])
-                plt.xlabel("Time (s)")
-                plt.ylabel(r"Amplitude ($\mu$V)")
-            
-            elif domain == 'Frequency':
-                # Compute FFT
-                fft_vals = np.fft.rfft(series_data)
-                fft_freqs = np.fft.rfftfreq(n_timepoints, d=1/fs)
-                scaled_fft_magnitude = (np.abs(fft_vals) / n_timepoints) * 2
-
-                # Get limits from slider / configuration
-                freq_min, freq_max = freq_range
-                idx = np.where((fft_freqs >= freq_min) & (fft_freqs <= freq_max))
-                
-                # Automatically grab a unique color for this specific channel
-                color_cycle = plt.rcParams['axes.prop_cycle'].by_key()['color']
-                channel_color = color_cycle[s_idx % len(color_cycle)]
-                
-                # Clean implementation passing raw colors safely
-                plt.stem(
-                    fft_freqs[idx], 
-                    scaled_fft_magnitude[idx], 
-                    label=labels[s_idx],
-                    linefmt='-',                    # Solid line style
-                    markerfmt='o',                  # Circle marker style
-                    basefmt=' ',                    # Keeps baseline hidden
-                )
-                
-                # Use plt.setp to safely apply the tuple color to the lines and markers
-                # This bypasses the strict string format parser limitations
-                stems = plt.gca().containers[-1]     # Grabs the last added stem group
-                plt.setp(stems.stemlines, color=channel_color)
-                plt.setp(stems.markerline, color=channel_color)
-                
-                plt.xlabel("Frequency (Hz)")
-                plt.ylabel(r"Magnitude ($\mu$V)")
-                plt.xlim(freq_min, freq_max)
-
-        plt.legend(loc='upper left', bbox_to_anchor=(1, 1))
-        plt.grid(True, linestyle='--', alpha=0.6)
-        # Apply the 1.2 Hz tick marks specifically when in the Frequency domain
-        if domain == 'Frequency':
-            plt.gca().xaxis.set_major_locator(ticker.MultipleLocator(1.2))
-            # Rotate labels slightly if they crowd each other at wide ranges
-            plt.xticks(rotation=45) 
-            
-        title_suffix = f" | Epoch: {epoch_idx}" if len(npy_data.shape) == 3 else ""
-        plt.title(f"Domain: {domain}{title_suffix}")
-        plt.show()
-            
-    # 3. Base UI Widgets
-    domain_switch = widgets.ToggleButtons(
-        options=['Time', 'Frequency'],
-        value='Time',
-        description='Domain:',
-        button_style='info'
-    )
-
-    series_selector = widgets.SelectMultiple(
-        options=[(labels[i], i) for i in range(npy_data.shape[1])],
-        value=[0, 1, 2, 3],  
-        description='Ch Name:',
-        layout={'height': '225px' if len(npy_data.shape) == 3 else '400px', 'width': '150px'}
-    )
-
-    # 4. Handle 2D vs 3D Layout Setup
-    widget_dict = {
-        'domain': domain_switch,
-        'selected_series': series_selector,
-        'freq_range': freq_slider
-    }
-
-    if len(npy_data.shape) == 3:
-        epoch_selector = widgets.Select(
-            options=[(f"Ep: {i+1}", i) for i in range(npy_data.shape[2])],
-            value=0,
-            description='Epoch:',
-            layout={'height': '225px', 'width': '150px'}
-        )
-        widget_dict['epoch_idx'] = epoch_selector
-        controls = widgets.VBox([epoch_selector, series_selector])
-    else:
-        controls = widgets.VBox([series_selector])
-
-    out = widgets.interactive_output(plot_data, widget_dict)
-
-        # 5. Dynamic Slider Visibility (Shows slider ONLY during Frequency Mode)
-    def toggle_slider_visibility(change):
-        if change['new'] == 'Frequency':
-            freq_slider.layout.display = 'block'
-        else:
-            freq_slider.layout.display = 'none'
-
-    domain_switch.observe(toggle_slider_visibility, names='value')
-    freq_slider.layout.display = 'none'  # Hidden by default because default is 'Time'
-
-    # 6. Render Layout
-    # Create a small spacer to separate the switch and the slider nicely
-    spacer = widgets.Box(layout=widgets.Layout(width='40px'))
-
-    # CHANGE THIS: Use HBox instead of VBox to place them side by side
-    top_bar = widgets.HBox([domain_switch, spacer, freq_slider])
-    
-    main_layout = widgets.VBox([
-        top_bar, 
-        widgets.HBox([controls, out])
-    ])
-
-    display(main_layout)
+    _summaryplot(npy_data, meta_data, use_stem = True, epoch_offset = 1)
