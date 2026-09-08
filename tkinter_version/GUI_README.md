@@ -153,7 +153,7 @@ prefix of the output file name.
 
 `theme.py` holds the palette taken from the project logo and applies it to both
 ttk widgets and matplotlib. Red is for actions and warnings only; plot traces
-run through the grey ramp with red last. Change a value there and the whole app
+use matplotlib default colours. Change a value there and the whole app
 follows.
 
 ## Known limits

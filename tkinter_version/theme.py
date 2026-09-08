@@ -17,18 +17,9 @@ PALETTE = {
     "white":     "#FFFFFF",   # plot canvas, entry fields
 }
 
-# Series colours for line plots: the grey ramp first, red last so a single
-# highlighted trace stands out the way it does in the logo.
-SERIES_COLORS = [
-    PALETTE["black"],
-    PALETTE["dark"],
-    PALETTE["mid"],
-    "#6E6E6E",
-    "#3A3A3A",
-    "#BFBFBF",
-    PALETTE["red"],
-    PALETTE["red_dark"],
-]
+# Plotted traces keep matplotlib's own default colour cycle, so a channel looks
+# the same here as it does in the notebooks. The palette above dresses the
+# window chrome and the axes, not the data.
 
 FONT = ("Segoe UI", 10)
 FONT_BOLD = ("Segoe UI", 10, "bold")
@@ -88,7 +79,6 @@ def apply(root):
         "axes.edgecolor": p["black"],
         "axes.labelcolor": p["black"],
         "axes.titlecolor": p["black"],
-        "axes.prop_cycle": matplotlib.cycler(color=SERIES_COLORS),
         "text.color": p["black"],
         "xtick.color": p["dark"],
         "ytick.color": p["dark"],
