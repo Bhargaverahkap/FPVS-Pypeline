@@ -38,6 +38,34 @@ fi
 "$PY" --version
 
 echo
+echo "=== Checking for Tk (needed by the desktop app) ==="
+if ! "$PY" -c "import tkinter" >/dev/null 2>&1; then
+    echo "Python has no Tk support, installing it..."
+    if [[ "$(uname)" == "Darwin" ]]; then
+        if command -v brew >/dev/null 2>&1; then
+            brew install python-tk || true
+        else
+            echo "Install Homebrew, then run: brew install python-tk"
+            exit 1
+        fi
+    else
+        if command -v apt >/dev/null 2>&1; then
+            sudo apt install -y python3-tk || true
+        elif command -v dnf >/dev/null 2>&1; then
+            sudo dnf install -y python3-tkinter || true
+        else
+            echo "Install the Tk package for your distribution, then run this again."
+            exit 1
+        fi
+    fi
+    if ! "$PY" -c "import tkinter" >/dev/null 2>&1; then
+        echo "Tk is still missing. The pipeline modules will work, the desktop app will not."
+        exit 1
+    fi
+fi
+echo "Tk found."
+
+echo
 echo "=== Creating virtual environment in .venv ==="
 if [ ! -d ".venv" ]; then
     "$PY" -m venv .venv

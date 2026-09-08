@@ -13,5 +13,6 @@ ipython
 jupyterlab
 nbformat
 
-# Tk (tkinter_version build) ships with Python on Windows and macOS.
-# On Linux install it with: sudo apt install python3-tk
+# Tk is not a pip package: it comes with Python itself. The setup scripts check
+# for it and, on Linux, install it. Windows: tick "tcl/tk and IDLE" in the
+# Python installer. macOS: brew install python-tk. Linux: sudo apt install python3-tk

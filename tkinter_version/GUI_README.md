@@ -156,6 +156,15 @@ ttk widgets and matplotlib. Red is for actions and warnings only; plot traces
 use matplotlib default colours. Change a value there and the whole app
 follows.
 
+## Tk
+
+Tk is not installed by pip - it ships with Python. `setup_windows.bat` and
+`setup_macos.sh` check for it before creating the environment: the Linux branch
+installs it (`python3-tk` / `python3-tkinter`), the macOS branch installs
+`python-tk` through Homebrew, and the Windows branch tells you to re-run the
+Python installer and tick "tcl/tk and IDLE". Check it yourself with
+`python -c "import tkinter"`.
+
 ## Known limits
 
 - Plotly viewers (`showme3DTopomap`, `showme3DTopomapnewmesh`) open in the web

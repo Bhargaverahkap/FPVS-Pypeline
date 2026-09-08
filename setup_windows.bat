@@ -26,6 +26,17 @@ if errorlevel 1 (
 %PY% --version
 
 echo.
+echo === Checking for Tk (needed by the desktop app) ===
+%PY% -c "import tkinter" >nul 2>&1
+if errorlevel 1 (
+    echo Python was installed without Tk/tcl support.
+    echo Re-run the Python installer from https://www.python.org/downloads/windows/
+    echo choose "Modify", and tick "tcl/tk and IDLE". Then run this script again.
+    exit /b 1
+)
+echo Tk found.
+
+echo.
 echo === Creating virtual environment in .venv ===
 if not exist ".venv" (
     %PY% -m venv .venv
