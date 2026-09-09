@@ -165,7 +165,6 @@ def electrodelocationchange(filepath, stepno, electrodelocationfilepath=None):
     if electrodelocationfilepath == None:
         electrodelocationfilepath = r"biosemi_locations_64_10-20_fixP9P10_add4.xyz"
 
-    
     extn_str = f"{stepno}_chanlocs "
     electrode_data = np.loadtxt(electrodelocationfilepath, dtype=str, max_rows=68)
     npy_data , meta_data, npyfilepath, metafilepath = loadalldata(filepath)
@@ -386,7 +385,7 @@ def performICA(filepath, ch_name = None):
     npy_data, meta_data, npyfilepath, metafilepath = loadalldata(filepath)
     # Design Butterworth bandpass filter
     lowcut = 1
-    highcut = 30
+    highcut = 20
     order = 4
 
     
@@ -406,12 +405,10 @@ def performICA(filepath, ch_name = None):
         dataforICA[:, chid] = filtfilt(bn, an, sig)
         # dataforICA[:, chid] = filtfilt(bn2, an2, sig)
 
-    dataforICA = np.moveaxis(dataforICA, -1, 0)  # shuffling dims to reflect (nCh,nData)
-
     # extract channel names from the lw6 data file and create an information base for the mne package
     ch_names = meta_data["chanlocs"]["labels"].tolist()
     info = mne.create_info(ch_names=ch_names, sfreq=fs, ch_types='eeg')
-    raw = mne.io.RawArray(dataforICA, info)
+    raw = mne.io.RawArray(np.transpose(dataforICA), info)
 
     montage_dict = {}
     for ch in range(len(ch_names)):
@@ -443,7 +440,7 @@ def overlayICAondata(filepath, ica_data):
     cf.showmeICAoverlayedondata(npy_data, ica_data, labels=labels,subjid=subjid)
 
 def applyICA(filepath, ica, raw, rmidx):
-    npy_data, meta_data = loadalldata(filepath)
+    npy_data, meta_data, npyfilepath, metafilepath = loadalldata(filepath)      
     print("Removing ICA components:", rmidx)
     ica.exclude = rmidx
     raw_clean = ica.apply(raw.copy())
