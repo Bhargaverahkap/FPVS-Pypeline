@@ -25,11 +25,19 @@ rather than the notebook one in the repository root.
 └──────────────────────────────────────────────────────────────────────┘
 ```
 
-**Load data** picks the loader from the file extension: `.bdf` imports through
-`extractdatafrombdf`, `.mat`/`.lw6` through `convertMATtoPY`, `.npy`/`.pkl` load
-straight in. Every step afterwards works on the file named in the top bar. When
-a step writes a new file, that file becomes the current one and the centre panel
-redraws from it.
+**Load data** only takes a name and a path. The file dialog is there to save you
+typing; it never converts anything. Whichever member of a dataset you point at,
+the app remembers the path, and the steps pick the suffix they need
+(`loadalldata` reads `.npy` + `.pkl`, `extractdatafrombdf` reads `.bdf`,
+`convertMATtoPY` reads `.mat` + `.lw6`).
+
+If the `.npy`/`.pkl` pair already exists it loads straight away and the centre
+panel draws it. If it does not, the panel stays blank and the log says so - run
+one of the import steps in the Preprocessing menu to create it.
+
+Every step afterwards works on the file named in the top bar. When a step writes
+a new file, that file becomes the current one and the centre panel redraws from
+it.
 
 **The centre panel** is the summary viewer: domain switch, frequency range,
 epoch list and channel list. With no data it draws nothing at all - no message,

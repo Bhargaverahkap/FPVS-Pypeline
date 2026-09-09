@@ -32,10 +32,6 @@ import cust_funcs as cf
 
 MODULES = {"app": app, "cf": cf}
 
-DATA_SUFFIXES = {".npy", ".pkl"}
-BDF_SUFFIXES = {".bdf"}
-MAT_SUFFIXES = {".mat", ".lw6"}
-
 
 # ---------------------------------------------------------------------------
 # turning typed text into arguments
@@ -433,8 +429,16 @@ class FPVSApp(tk.Tk):
     # -- loading ------------------------------------------------------------
 
     def load_data(self):
+        """Pick the file to work on. The dialog only supplies the name and path.
+
+        No conversion runs here. The pipeline addresses a dataset by its stem and
+        picks the suffix it needs, so whichever member of the set you point at,
+        the app remembers the path and the steps take it from there. If the
+        .npy/.pkl pair already exists it is shown; if not, the centre panel stays
+        blank until an import step from the Preprocessing menu creates it.
+        """
         chosen = filedialog.askopenfilename(
-            title="Load data",
+            title="Choose the data file",
             filetypes=[("All supported", "*.npy *.pkl *.bdf *.mat *.lw6"),
                        ("Processed data", "*.npy *.pkl"),
                        ("BioSemi", "*.bdf"),
@@ -443,25 +447,29 @@ class FPVSApp(tk.Tk):
         if not chosen:
             return
 
-        path = Path(chosen)
-        suffix = path.suffix.lower()
-        if suffix in BDF_SUFFIXES:
-            self.filepath = path
-            self._start("Importing .bdf", app.extractdatafrombdf, (path,), {}, on_thread=True)
-        elif suffix in MAT_SUFFIXES:
-            self.filepath = path
-            self._start("Converting .mat", app.convertMATtoPY, (path,), {}, on_thread=True)
-        elif suffix in DATA_SUFFIXES:
-            self.filepath = path
-            self.reload_current()
-        else:
-            messagebox.showerror("Unsupported file", f"Cannot load {path.name}.", parent=self)
+        self.filepath = Path(chosen)
+        self.path_var.set(str(self.filepath))
+        self.log(f"\nSelected {self.filepath}\n")
+        self.reload_current()
 
     def reload_current(self):
-        """Re-read the current file from disk and repaint the centre panel."""
+        """Read the .npy/.pkl pair for the current path and repaint the centre panel."""
         if self.filepath is None:
             self.summary.clear()
             return
+
+        self.path_var.set(str(self.filepath))
+        npyfilepath = self.filepath.with_suffix(".npy")
+        metafilepath = self.filepath.with_suffix(".pkl")
+
+        if not (npyfilepath.exists() and metafilepath.exists()):
+            self.npy_data = self.meta_data = None
+            self.summary.clear()
+            missing = [str(p.name) for p in (npyfilepath, metafilepath) if not p.exists()]
+            self.log(f"No processed data yet ({', '.join(missing)} not found). "
+                     f"Run an import step from the Preprocessing menu to create it.\n")
+            return
+
         try:
             npy_data, meta_data, _, _ = app.loadalldata(self.filepath)
         except Exception as exc:
@@ -472,7 +480,6 @@ class FPVSApp(tk.Tk):
 
         self.npy_data = npy_data
         self.meta_data = meta_data
-        self.path_var.set(str(self.filepath))
         self.summary.set_data(npy_data, meta_data)
         self.log(f"Loaded {self.filepath}  shape {np.asarray(npy_data).shape}\n")
 
