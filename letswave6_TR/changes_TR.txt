@@ -1,0 +1,14 @@
+Changes: When I changed things, there's obvious evidence of this, because I kept the original file as a backup next to my modified one.  
+So for example, I added a function to sum epochs to the dropdown menu of the "average epochs" GUI, and if you go into the LW folder, 
+you'll find the original file "LW_grand_average_ORIGINAL" next to my modified one (which replaces the default name: "LW_grand_average").
+  
+These changes affect: 
+- 1) adding an option to sum epochs (intended for harmonics) with the "average epochs" function as I just noted;
+- 2) the viewing of topographies in/from the multiviewer (in the "core functions" folder) - in my version the bottom row of the 2D scalp 
+     maps was getting cut off and not displaying, and I wanted the 3D headplots to be the back of the head by default. Also, the spline files 
+     have been pretty skewed in LW5 and LW6 (e.g., the front row of electrodes was several cm too high over the eyebrows), and this version 
+     takes my modified spline file - if you have questions about this I have some slides to show the comparison.
+- 3) not my edit, but I had a version with a bug in the grand average function (epochs were not being grand averaged) that is fixed here.  
+- One thing I've been doing manually is to change the plotted area in the average viewer function to the SE from the SD: this is noted on
+     line 225 of the CGLW_multi_viewer_average function, but by default it's not set to do this.
+- All the plugins I'd been using in LW5 are modified for use in LW6 - I didn't do this systematically for every plugin though.

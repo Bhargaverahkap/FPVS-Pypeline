@@ -137,6 +137,13 @@ def convertMATtoPY(filepath):
     
     return npy_data, meta_data, filepath
 
+def ConvertToPyfinal(filepath):
+    matfilepath = filepath.with_suffix('.mat')
+    with h5py.File(matfilepath,'r') as f:
+        mat_data = f['data'][:]
+    npy_data = np.squeeze(mat_data)
+    return npy_data
+    
 def renamechannels(filepath,stepno, targets = None, replacements = None):
 
     if targets == None:
@@ -238,20 +245,22 @@ def electrodelocationchange(filepath, stepno, electrodelocationfilepath=None):
     print("\n")
     return npy_data, meta_data, filepath
 
-def downsampling(filepath, stepno, dsfact = None, showsummaryflag = True, summarychid = None):
+def downsampling(filepath, stepno, dsfact = None,delaySample = 0):
     
     extn_str = f"{stepno}_ds "
-    
     npy_data , meta_data, npyfilepath, metafilepath = loadalldata(filepath)
     if dsfact is None:
         dsfact = meta_data["fs"]//256
-
+    
+    if delaySample> dsfact:
+        raise ValueError("the delay sample needs to be less than the downsampling factor")
+    
     ndpts = npy_data.shape[0]  # number of data points
     nch = npy_data.shape[1]  # number of channels
 
     ds_data = np.zeros((ndpts // dsfact, nch))
 
-    dsampind = range(0, ndpts, dsfact)
+    dsampind = range(delaySample, ndpts, dsfact)
     ds_data[:, :nch] = npy_data[dsampind, :nch]
 
     # saving the data file
@@ -305,13 +314,18 @@ def delete_channels(filepath,stepno,deletechnames = None):
 
     return npy_data, meta_data, filepath
 
-def bandpassfilter(filepath,stepno,filterparameters = None, showsummaryflag = True, summarychid = None):
+def bandpassfilter(filepath,stepno,low_cut = .1, high_cut = None, filter_order = 4):
     
     extn_str = f"{stepno}_but "
-    if filterparameters == None:
-        filterparameters = [4, 0.1, 100] #order of the filter, lowpass and highpass 
-
+    
     npy_data , meta_data, npyfilepath, metafilepath = loadalldata(filepath)
+    
+    if high_cut == None:
+        high_cut = (meta_data['fs']-1)//2
+        
+    filterparameters = [filter_order, low_cut, high_cut] #order of the filter, lowpass and highpass 
+    print(filterparameters)
+    
     fs = meta_data["fs"]
     nch = npy_data.shape[1]
 
@@ -319,6 +333,7 @@ def bandpassfilter(filepath,stepno,filterparameters = None, showsummaryflag = Tr
     nyquist = 0.5 * fs
     low = filterparameters[1] / nyquist
     high = filterparameters[2] / nyquist
+    print(low,high)
     b, a = butter(filterparameters[0], [low, high], btype='band')
     filt_data = np.zeros(npy_data.shape)
 
@@ -342,7 +357,7 @@ def bandpassfilter(filepath,stepno,filterparameters = None, showsummaryflag = Tr
     print("\n")
     return npy_data, meta_data, filepath
 
-def notchfilter(filepath,stepno,notchparameters = None, showsummaryflag = True, summarychid = None):
+def notchfilter(filepath,stepno,notchparameters = None):
     extn_str = f"{stepno}_notchfilt "
     
     if notchparameters == None:
@@ -378,103 +393,7 @@ def notchfilter(filepath,stepno,notchparameters = None, showsummaryflag = True, 
 
     return npy_data, meta_data, filepath
 
-def performICA(filepath, ch_name = None):
-
-    if ch_name == None:
-        ch_name = 'Fp1'
-
-    npy_data, meta_data, npyfilepath, metafilepath = loadalldata(filepath)
-    # Design Butterworth bandpass filter
-    lowcut = 1
-    highcut = 30
-    order = 4
-
-    
-    fs = int((meta_data["fs"]))
-    slope = 2
-    nyquist = 0.5 * fs
-    low = lowcut / nyquist
-    high = highcut / nyquist
-    fs = meta_data["fs"]
-
-    dataforICA = np.zeros(npy_data.shape)  # removing nonessential dims
-    b, a = butter(order,[low, high], btype='band')
-    bn, an = iirnotch(50, slope, fs)
-
-    for chid in range(npy_data.shape[1]):
-        sig = filtfilt(b, a, npy_data[:, chid])
-        dataforICA[:, chid] = filtfilt(bn, an, sig)
-        # dataforICA[:, chid] = filtfilt(bn2, an2, sig)
-
-    dataforICA = np.moveaxis(dataforICA, -1, 0)  # shuffling dims to reflect (nCh,nData)
-
-    # extract channel names from the lw6 data file and create an information base for the mne package
-    ch_names = meta_data["chanlocs"]["labels"].tolist()
-    info = mne.create_info(ch_names=ch_names, sfreq=fs, ch_types='eeg')
-    raw = mne.io.RawArray(dataforICA, info)
-
-    montage_dict = {}
-    for ch in range(len(ch_names)):
-        name = ch_names[ch]
-        montage_dict[name] = [meta_data["chanlocs"]["X"][ch], meta_data["chanlocs"]["Y"][ch],
-                              meta_data["chanlocs"]["Z"][ch]]
-
-    print("length of dict:", len(montage_dict))
-
-    montage = mne.channels.make_dig_montage(ch_pos=montage_dict, coord_frame='head')
-    raw.set_montage(montage)
-    # perform ICA
-    ica = ICA(n_components=0.999, random_state=97, max_iter='auto')
-    ica.fit(raw)
-
-    # print(ica)
-    sources = ica.get_sources(raw)
-    ica_data = sources.get_data()
-    eog_indices, eog_scores = ica.find_bads_eog(raw, ch_name=ch_name)
-    return ica, raw, ica_data, eog_indices
-
-def overlayICAondata(filepath, ica_data):
-    npyfilepath = filepath.with_suffix(".npy")
-    metafilepath = filepath.with_suffix(".pkl")
-    npy_data = np.load(npyfilepath)
-    meta_data = cf.loadMetadata(metafilepath)
-    labels = np.array(meta_data["chanlocs"]["labels"], dtype=object)
-    subjid = npyfilepath.stem.split()[-1]
-    cf.showmeICAoverlayedondata(npy_data, ica_data, labels=labels,subjid=subjid)
-
-def performandoverlayICA(filepath, ch_name = None):
-    """Run ICA and immediately overlay the components on the raw data.
-
-    Convenience wrapper that chains performICA and overlayICAondata so the
-    fitting and the visual inspection happen in one call. Returns exactly what
-    performICA returns, so the result can be handed straight to applyICA.
-    """
-    ica, raw, ica_data, eog_indices = performICA(filepath, ch_name = ch_name)
-    print("Suspected EOG components:", eog_indices)
-    overlayICAondata(filepath, ica_data)
-    return ica, raw, ica_data, eog_indices
-
-def applyICA(filepath, ica, raw, rmidx):
-    npy_data, meta_data, npyfilepath, metafilepath = loadalldata(filepath)
-    print("Removing ICA components:", rmidx)
-    ica.exclude = rmidx
-    raw_clean = ica.apply(raw.copy())
-    npy_data = raw_clean.get_data()
-
-    meta_data["ICA"] = rmidx
-    meta_data["shape"] = npy_data.shape
-    meta_data["size"] = npy_data.size
-    extn_str = "ica_filt "
-    meta_data = cf.updatemetadataHistory(meta_data,extn_str)
-    filepath = filepath.with_name( extn_str + filepath.stem)
-    npy_data = np.moveaxis(npy_data, -1, 0)
-    savealldata(npy_data, meta_data, filepath)
-    print("ICA performed, data saved as ", filepath)
-    print("\n")
-
-    return npy_data, meta_data, filepath
-
-def segmentation(filepath, stepno, startcode = None, segmentparams = [None,None], showsummaryflag = True, summarychid = None):
+def segmentation(filepath, stepno, startcode = None, segmentparams = [None,None]):
 
     extn_str = f"{stepno}_ep "
     errorflag = 0
@@ -579,6 +498,7 @@ def segmentation(filepath, stepno, startcode = None, segmentparams = [None,None]
 
     nch = npy_data.shape[1]
     ep_data = np.zeros((duration , nch, int(sum(eventreps))))
+    print(ep_data.shape)
     ## add functionality that makes this compatible with all expts, not just this one ie. self calculating the 41 in this case
     count = 0
     eventrepdata = {}
@@ -591,9 +511,7 @@ def segmentation(filepath, stepno, startcode = None, segmentparams = [None,None]
             dsamp_end = startendsample[eventno][iterid][1]
             startendsampid[count, 0] = dsamp_start
             startendsampid[count, 1] = dsamp_end
-
             eventrep_dat = np.arange(dsamp_start, dsamp_end, dtype="int")
-            # print("range:", dsamp_start, "-", dsamp_end, " length:", dsamp_end - dsamp_start)
             ep_data[:, :nch, count] = npy_data[eventrep_dat, :nch]
             numrep.append(count)
             count += 1
@@ -604,7 +522,7 @@ def segmentation(filepath, stepno, startcode = None, segmentparams = [None,None]
     if errorflag == 0:
         npy_data = ep_data.copy()
         meta_data["eventrepid"] = eventrepdata
-
+    print("npy_data shape is: ", npy_data.shape) 
     meta_data = cf.updatemetadataHistory(meta_data, extn_str)
     filepath = filepath.with_name( extn_str + filepath.stem)
     savealldata(npy_data, meta_data, filepath)
@@ -613,36 +531,198 @@ def segmentation(filepath, stepno, startcode = None, segmentparams = [None,None]
     print("\n")
     return npy_data, meta_data, filepath
 
-def interpolate(filepath,stepno, interp_chnames, bad_chnames = None, showsummaryflag = True, summarychid = None):
+# def performICA(filepath, ch_name = None):
+
+#     if ch_name == None:
+#         ch_name = 'Fp1'
+
+#     npy_data, meta_data, npyfilepath, metafilepath = loadalldata(filepath)
+#     if len(npy_data.shape) == 3:
+#         npy_data = np.swapaxes(npy_data, 1, -1)
+#         npy_data.reshape(-1, npy_data.shape[-1])
+#         np.vstack(npy_data)
+#         npy_data = np.concatenate(npy_data, axis=0)
+#     # Design Butterworth bandpass filter
+#     lowcut = 1
+#     highcut = 40
+#     order = 4
+
+    
+#     fs = int((meta_data["fs"]))
+#     slope = 2
+#     nyquist = 0.5 * fs
+#     low = lowcut / nyquist
+#     high = highcut / nyquist
+#     fs = meta_data["fs"]
+
+#     dataforICA = np.zeros(npy_data.shape)  # removing nonessential dims
+#     b, a = butter(order,[low, high], btype='band')
+#     bn, an = iirnotch(50, slope, fs)
+
+#     for chid in range(npy_data.shape[1]):
+#          dataforICA[:, chid] = filtfilt(b, a, npy_data[:, chid])
+#         # dataforICA[:, chid] = filtfilt(bn, an, sig)
+#         # dataforICA[:, chid] = filtfilt(bn2, an2, sig)
+
+#     dataforICA = np.moveaxis(dataforICA, -1, 0)  # shuffling dims to reflect (nCh,nData)
+#     print('data for ica shape',dataforICA.shape)
+#     # extract channel names from the lw6 data file and create an information base for the mne package
+#     ch_names = meta_data["chanlocs"]["labels"].tolist()
+#     info = mne.create_info(ch_names=ch_names, sfreq=fs, ch_types='eeg')
+#     raw = mne.io.RawArray(dataforICA, info)
+#     raw = raw.filter(l_freq = 0, h_freq = 20)
+    
+#     montage_dict = {}
+#     for ch in range(len(ch_names)):
+#         name = ch_names[ch]
+#         montage_dict[name] = [meta_data["chanlocs"]["X"][ch], meta_data["chanlocs"]["Y"][ch],
+#                               meta_data["chanlocs"]["Z"][ch]]
+
+#     print("length of dict:", len(montage_dict))
+
+#     montage = mne.channels.make_dig_montage(ch_pos=montage_dict, coord_frame='head')
+#     raw.set_montage(montage)
+#     # perform ICA
+#     ica = ICA(n_components=0.999, random_state=97, max_iter='auto')
+#     ica.fit(raw)
+
+#     # print(ica)
+#     sources = ica.get_sources(raw)
+#     ica_data = sources.get_data()
+#     eog_indices, eog_scores = ica.find_bads_eog(raw, ch_name=ch_name)
+    
+#     return ica, raw, ica_data, eog_indices, npy_data, meta_data
+
+# def performandoverlayICA(filepath, ch_name = None):
+#     """Run ICA and immediately overlay the components on the raw data.
+
+#     Convenience wrapper that chains performICA and overlayICAondata so the
+#     fitting and the visual inspection happen in one call. Returns exactly what
+#     performICA returns, so the result can be handed straight to applyICA.
+#     """
+#     ica, raw, ica_data, eog_indices, npy_data, meta_data = performICA(filepath, ch_name = ch_name)
+#     print("Suspected EOG components:", eog_indices)
+#     overlayICAondata(npy_data, meta_data, ica_data)
+#     return ica, raw, ica_data, eog_indices
+
+# def applyICA(filepath, ica, raw, rmidx):
+#     npy_data, meta_data, npyfilepath, metafilepath = loadalldata(filepath)
+#     print("Removing ICA components:", rmidx)
+#     ica.exclude = rmidx
+#     raw_clean = ica.apply(raw.copy())
+#     npy_data = raw_clean.get_data()
+
+#     meta_data["ICA"] = rmidx
+#     meta_data["shape"] = npy_data.shape
+#     meta_data["size"] = npy_data.size
+#     extn_str = "ica_filt "
+#     meta_data = cf.updatemetadataHistory(meta_data,extn_str)
+#     filepath = filepath.with_name( extn_str + filepath.stem)
+#     npy_data = np.moveaxis(npy_data, -1, 0)
+#     savealldata(npy_data, meta_data, filepath)
+#     print("ICA performed, data saved as ", filepath)
+#     print("\n")
+#     return npy_data, meta_data, filepath
+
+def performICA(filepath, ch_name=None, n_components=.95):
+    ch_name = ch_name or 'Fp1'
+    npy_data, meta_data, npyfilepath, metafilepath = loadalldata(filepath)
+    print(npy_data.shape)
+    if len(npy_data.shape) == 3:
+        npy_data = np.swapaxes(npy_data, 1, -1)
+        npy_data = np.swapaxes(npy_data,0,1)
+        npy_data.reshape(-1, npy_data.shape[-1])
+        np.vstack(npy_data)
+        npy_data = np.concatenate(npy_data, axis=0)
+    print('new shape', npy_data.shape)
+    orig_shape = npy_data.shape
+
+    fs = float(np.squeeze(meta_data["fs"]))
+    ch_names = list(meta_data["chanlocs"]["labels"])
+    info = mne.create_info(ch_names=ch_names, sfreq=fs, ch_types='eeg')
+
+    # analysis-grade Raw: unfiltered, keeps every FPVS harmonic
+    raw = mne.io.RawArray(np.ascontiguousarray(npy_data.T), info)
+
+    pos = np.column_stack([meta_data["chanlocs"]["X"],
+                           meta_data["chanlocs"]["Y"],
+                           meta_data["chanlocs"]["Z"]]).astype(float)
+    m = np.nanmax(np.abs(pos))
+    if m > 1.0:        pos /= 1000.0           # mm  -> m
+    elif m > 0.2:      pos *= 0.095            # unit sphere -> ~9.5 cm head
+    raw.set_montage(mne.channels.make_dig_montage(
+        ch_pos=dict(zip(ch_names, pos)), coord_frame='head'))
+
+    raw.set_eeg_reference('average')           # set once, before the copy
+
+    # estimation-grade copy: filtered only to condition the decomposition
+    raw_fit = raw.copy().filter(l_freq=1.0, h_freq=100.0, picks='eeg')
+
+    ica = ICA(n_components=n_components, method='infomax',
+              fit_params=dict(extended=True), random_state=97, max_iter='auto')
+    ica.fit(raw_fit)
+    print("fitted components:", ica.n_components_)
+
+    eog_indices, eog_scores = ica.find_bads_eog(raw_fit, ch_name=ch_name,
+                                                l_freq=1., h_freq=20.)
+    ica_data = ica.get_sources(raw_fit).get_data()
+    return ica, raw, ica_data, eog_indices, npy_data, meta_data, orig_shape
+
+def applyICA(filepath, ica, raw, rmidx, orig_shape=None):
+    npy_data, meta_data, npyfilepath, metafilepath = loadalldata(filepath)
+    ica.exclude = list(rmidx)
+    cleaned = ica.apply(raw.copy()).get_data().T        # (n_times, n_channels)
+
+    if orig_shape is not None and len(orig_shape) == 3:
+        n_samp, n_ep, n_ch = orig_shape
+        cleaned = cleaned.reshape(n_ep, n_samp, n_ch).transpose(1, 0, 2)
+
+    print(cleaned.shape)
+    meta_data["ICA"] = rmidx
+    meta_data["shape"], meta_data["size"] = cleaned.shape, cleaned.size
+    extn_str = "ica_filt_"
+    meta_data = cf.updatemetadataHistory(meta_data, extn_str)
+    filepath = filepath.with_name(extn_str + filepath.name)   # keeps the suffix
+    savealldata(cleaned, meta_data, filepath)
+    return cleaned, meta_data, filepath
+
+def overlayICAondata(npy_data, meta_data , ica_data):
+    labels = np.array(meta_data["chanlocs"]["labels"], dtype=object)
+    subjid = meta_data['name']
+    cf.showmeICAoverlayedondata(npy_data, ica_data, labels=labels,subjid=subjid)
+
+def interpolate(filepath,stepno, interp_chnames, bad_chnames = None, num_elecs = 3):
 
     npy_data, meta_data, npyfilepath, metafilepath = loadalldata(filepath)
     
     labels = (meta_data["chanlocs"]["labels"])
     interp_chids = np.where(np.isin(labels, interp_chnames))[0]
- 
+    print(interp_chnames)
     # interpolation
     badch = np.union1d(interp_chnames, bad_chnames)
+    badch_interps = badch.copy()
     interp_specs = {}
     for i in range(len(interp_chnames)):
         srt_idx, srt_labels = cf.givemeNNearestNeighbour(meta_data, interp_chids[i])
-        srtd_idx = np.where(~np.isin(srt_labels, badch))[0]
-        srtd_idx = srtd_idx[:3]
-        badch = np.append(badch, srt_labels[srtd_idx])
+        srtd_idx = np.where(~np.isin(srt_labels, badch_interps))[0]
+        srtd_idx = srtd_idx[:num_elecs]
+        badch_interps = np.append(badch_interps, srt_labels[srtd_idx])
         npy_data[:, interp_chids[i], :] = np.mean(npy_data[:, srtd_idx, :], axis=1)
         new_entry = {interp_chnames[i]: srt_labels[srtd_idx]}
         interp_specs.update(new_entry)
-        print(badch, "is interpolated using ", [labels[i] for i in srtd_idx])
+        print(interp_chnames[i], "is interpolated using ", [srt_labels[i] for i in srtd_idx])
 
     meta_data["interpolation"] = interp_specs
-    extn_str = f"{len(interp_chnames)}_interp"
+    
+    extn_str = f"{len(interp_chnames)}_interp "
 
     filepath = npyfilepath.with_name(extn_str + filepath.stem)
     savealldata(npy_data, meta_data, filepath)
     print("channels are interpolated and saved as ", filepath)
     print("\n")
-    return npy_data, meta_data, filepath, badch
+    return npy_data, meta_data, filepath
 
-def globalreferencing(filepath,stepno, badchids= None, showsummaryflag = True, summarychid = None):
+def globalreferencing(filepath,stepno, badchids= None):
     extn_str = f"{stepno}_ref "
     npy_data, meta_data,npyfilepath,metafilepath = loadalldata(filepath)
     labels = meta_data["chanlocs"]["labels"]
@@ -736,15 +816,15 @@ def mergeepochs(folderpath,event_label):
     npy_data = np.concatenate(data_list, axis=2)
     print(npy_data.shape)
     meta_data = {
-        "event_label": event_label,
+        "name": [f"{event_label} MERGED"],
         "subjids": subj_merged,
         "shape": npy_data.shape,
         "size": npy_data.size,
-        "fs": 256,
+        "fs": tempmeta_data['fs'],
         "chanlocs": tempmeta_data["chanlocs"],
         "history": {},
         "fields": tempmeta_data["fields"],
-        "bandpass filter param": meta_data["bandpass filter param"]
+        "bandpass filter param": tempmeta_data["bandpass filter param"]
     }
     meta_data["fields"].update({"shape":"ndata,nchannels,nepochs,nsubjects"})
     filepath = folderpath/ f"{event_label} MERGED"
@@ -753,7 +833,7 @@ def mergeepochs(folderpath,event_label):
     print("\n")
     return npy_data, meta_data, filepath
 
-def frequencytransform(filepath,stepno,freqbin = None, showsummaryflag = True, summarychid = None):
+def frequencytransform(filepath,stepno,freqbin = None):
     npy_data, meta_data, npyfilepath,metafilepath = loadalldata(filepath)
     if freqbin == None:
         freqbin = [0.01 ,50]
@@ -786,7 +866,7 @@ def frequencytransform(filepath,stepno,freqbin = None, showsummaryflag = True, s
     print('\n')
     return npy_data, meta_data, filepath
 
-def averagingacrosstrials(filepath,stepno, showsummaryflag = True, summarychid = None):
+def averagingacrosstrials(filepath,stepno):
     npy_data, meta_data, npyfilepath,metafilepath = loadalldata(filepath)
     npy_data = np.mean(npy_data, axis=2)
     extn_str = f"{stepno}_avg "
@@ -797,7 +877,7 @@ def averagingacrosstrials(filepath,stepno, showsummaryflag = True, summarychid =
     print('\n')
     return npy_data, meta_data, filepath
 
-def chunking(filepath,stepno,basefreq = 1.2 ,window_width = .4, showsummaryflag = True, summarychid = None):
+def chunking(filepath,stepno,basefreq = 1.2 ,window_width = .4):
     extn_str = f"{stepno}_chunk"
     npy_data, meta_data, npyfilepath,metafilepath = loadalldata(filepath)
     fs = meta_data["fs"]
@@ -814,13 +894,15 @@ def chunking(filepath,stepno,basefreq = 1.2 ,window_width = .4, showsummaryflag 
     chunk_data = np.zeros((int(np.floor(chunkWidth / freq_res)), npy_data.shape[1], len(harmonics)))
     idx = np.where((freqs >= freq_min) & (freqs <= freq_max))[0]
     freq_idx = freqs[idx]
-
+    base_harmonics = np.zeros(len(harmonics))
     for chid in range(npy_data.shape[1]):
         for fhid in range(len(harmonics)):
             idx = np.where(
                 (freq_idx > (harmonics[fhid] - chunkWidth / 2)) & (freq_idx <= (harmonics[fhid] + chunkWidth / 2)))[0]
+            base_harmonics[fhid] = np.mean(freq_idx[idx])
             chunk_data[:, chid, fhid] = npy_data[idx, chid]
 
+    meta_data["chunk_centres"] = base_harmonics 
     npy_data = chunk_data.copy()
     filepath = filepath.with_name(extn_str + filepath.stem)
     meta_data = cf.updatemetadataHistory(meta_data,extn_str)
@@ -829,34 +911,34 @@ def chunking(filepath,stepno,basefreq = 1.2 ,window_width = .4, showsummaryflag 
     print('\n')
     return npy_data, meta_data, filepath
 
-def selectingchunks(filepath, stepno,numharmonics = None, showsummaryflag = True, summarychid = None):
-    if numharmonics == None:
-        numharmonics = 3
+def selectingchunks(filepath, stepno,numharmonics_br = 3, numharmonics_odd = 2):
     br_extn_str = f"{stepno}_baseline"
     odd_extn_str = f"{stepno}_oddball"
     #So far, this selects only the first three harmonics of the baseline and oddball responses
     
     npy_data, meta_data, npyfilepath,metafilepath = loadalldata(filepath)
-    bl_chunks = np.arange(4, npy_data.shape[2], 5)
-    bl_chunkmask = np.zeros(npy_data.shape[2], dtype=bool)
-    bl_chunkmask[bl_chunks] = "True"
-    odd_chunkmask = ~bl_chunkmask
-
-    br_data = npy_data[:, :, bl_chunkmask]
+    br_chunks = np.arange(4, npy_data.shape[2], 5)
+    br_chunkmask = np.zeros(npy_data.shape[2], dtype=bool)
+    br_chunkmask[br_chunks] = "True"
+    odd_chunkmask = ~br_chunkmask
+    odd_chunks = np.where(odd_chunkmask)[0]
+    
+    br_data = npy_data[:, :, br_chunkmask]
     odd_data = npy_data[:, :, odd_chunkmask]
     # Select the first 3 for baseline and 12 chunks for oddball
     
-    br_data = br_data[:, :, 0:numharmonics]
-    odd_data = odd_data[:, :, 0:numharmonics]
-
+    br_data = br_data[:, :, 0:numharmonics_br]
+    odd_data = odd_data[:, :, 0:numharmonics_odd]
     br_meta_data = meta_data.copy()
     odd_meta_data = meta_data.copy()
 
-    br_meta_data["nChunks"] = numharmonics
+    br_meta_data["nChunks"] = numharmonics_br
     br_meta_data["eventType"] = "Baseline"
+    br_meta_data["nHarmonics"] = meta_data["chunk_centres"][br_chunks[:numharmonics_br]]
 
-    odd_meta_data["nChunks"] = numharmonics
+    odd_meta_data["nChunks"] = numharmonics_odd
     odd_meta_data["eventType"] = "Oddball"
+    odd_meta_data["nHarmonics"] = meta_data["chunk_centres"][odd_chunks[:numharmonics_odd]]
 
     br_meta_data = cf.updatemetadataHistory(br_meta_data, br_extn_str)
     odd_meta_data = cf.updatemetadataHistory(odd_meta_data, odd_extn_str)
@@ -868,7 +950,7 @@ def selectingchunks(filepath, stepno,numharmonics = None, showsummaryflag = True
     print('\n')
     return br_data, br_meta_data, odd_data, odd_meta_data, filepath_br, filepath_odd
 
-def sumofharmonics(filepath,stepno, showsummaryflag = True, summarychid = None):
+def sumofharmonics(filepath,stepno):
     npy_data, meta_data, npyfilepath,metafilepath = loadalldata(filepath)
     npy_data = np.sum(npy_data, axis=2)
     filepath = filepath.with_name(f"{stepno}_sum " + filepath.stem)
@@ -878,7 +960,6 @@ def sumofharmonics(filepath,stepno, showsummaryflag = True, summarychid = None):
     print("Harmonics of npy_data is summed and the new shape is:", npy_data.shape)
     print("\n")
     savealldata(npy_data, meta_data, filepath)
-
     return npy_data, meta_data, filepath
 
 def baselinefiltering(filepath,stepno):
@@ -886,7 +967,7 @@ def baselinefiltering(filepath,stepno):
     mid_point = (npy_data.shape[0]//2)-1
     idx = np.arange(npy_data.shape[0])
     idx = np.delete(idx,[mid_point-1,mid_point,mid_point+1])
-    baseline = np.mean(npy_data[idx,:],axis = 0)
+    baseline = np.mean(npy_data[idx,:],axis = 0, keepdims = True)
     npy_data = npy_data - baseline
     extn_str = f"{stepno}_bsl "
     filepath  = filepath.with_name(extn_str + filepath.stem)
@@ -937,7 +1018,7 @@ def mergeevents(folderpath,event_label):
     print("\n")
     return npy_data, meta_data, filepath
 
-def MEfrequencytransform(filepath,stepno,freqbin = None, showsummaryflag = True, summarychid = None):
+def MEfrequencytransform(filepath,stepno,freqbin = None):
     if freqbin == None:
         freqbin = [0.05, 50]
 
@@ -973,7 +1054,7 @@ def MEfrequencytransform(filepath,stepno,freqbin = None, showsummaryflag = True,
     savealldata(npy_data, meta_data, filepath)
     return npy_data, meta_data, filepath
 
-def MEaveragingacrosstrials(filepath,stepno, showsummaryflag = True, summarychid = None):
+def MEaveragingacrosstrials(filepath,stepno):
     npy_data, meta_data, npyfilepath,metafilepath = loadalldata(filepath)
     npy_data = np.mean(npy_data[:,:,:,:], axis=-2,keepdims = True)
     extn_str = f"{stepno}_avg "
@@ -984,7 +1065,7 @@ def MEaveragingacrosstrials(filepath,stepno, showsummaryflag = True, summarychid
     print('\n')
     return npy_data, meta_data, filepath
 
-def MEchunking(filepath,stepno,basefreq = 1.2,window_width = .4, showsummaryflag = True, summarychid = None): 
+def MEchunking(filepath,stepno,basefreq = 1.2,window_width = .4): 
     extn_str = f"{stepno}_chunk "
     npy_data, meta_data, npyfilepath,metafilepath = loadalldata(filepath)
     fs = meta_data["fs"]
@@ -1023,20 +1104,20 @@ def MEchunking(filepath,stepno,basefreq = 1.2,window_width = .4, showsummaryflag
     print('\n')
     return npy_data, meta_data, filepath
 
-def MEselectingchunks(filepath, stepno,numharmonics = None, showsummaryflag = True, summarychid = None):
+def MEselectingchunks(filepath, stepno,numharmonics = None):
     if numharmonics == None:
         numharmonics = 3
     extn_str = f"{stepno}_ep-select "
     #So far, this selects only the first three harmonics of the baseline and oddball responses
     
     npy_data, meta_data, npyfilepath,metafilepath = loadalldata(filepath)
-    bl_chunks = np.arange(4, npy_data.shape[2], 5)
-    print("bl_chunks are:", (bl_chunks+1)*1.2)
-    bl_chunkmask = np.zeros(npy_data.shape[2], dtype=bool)
-    bl_chunkmask[bl_chunks] = "True"
-    odd_chunkmask = ~bl_chunkmask
+    br_chunks = np.arange(4, npy_data.shape[2], 5)
+    print("br_chunks are:", (br_chunks+1)*1.2)
+    br_chunkmask = np.zeros(npy_data.shape[2], dtype=bool)
+    br_chunkmask[br_chunks] = "True"
+    odd_chunkmask = ~br_chunkmask
     print(1.2*(np.where(odd_chunkmask)[0]+1))
-    br_data = npy_data[:, :, bl_chunkmask,:]
+    br_data = npy_data[:, :, br_chunkmask,:]
     odd_data = npy_data[:, :, odd_chunkmask,:]
     # Select the first 3 for baseline and 12 chunks for oddball
     
@@ -1062,7 +1143,7 @@ def MEselectingchunks(filepath, stepno,numharmonics = None, showsummaryflag = Tr
     savealldata(odd_data, odd_meta_data, odd_filepath)
     return br_data, br_meta_data, br_filepath, odd_data, odd_meta_data, odd_filepath
 
-def MEsumofharmonics(filepath,stepno, showsummaryflag = True, summarychid = None):
+def MEsumofharmonics(filepath,stepno):
     npy_data, meta_data, npyfilepath,metafilepath = loadalldata(filepath)
     npy_data = np.sum(npy_data, axis=2,keepdims = True)
     extn_str = f"{stepno}_sum "
@@ -1090,24 +1171,15 @@ def MEbaselinefiltering(filepath,stepno):
     savealldata(npy_data, meta_data, filepath)
     return npy_data,meta_data, filepath
 
-def showmesummaryplot(npy_data, meta_data):
+def showmesummaryplot(npy_data, meta_data, ylim = None):
+    #1. Assigning key values out of meta_data dict
     fs = meta_data["fs"]
     labels = np.squeeze(meta_data["chanlocs"]["labels"])
     labels = labels.astype(str)
     n_timepoints = npy_data.shape[0]
-
-    # 1. New Frequency Range Widget
-    freq_slider = widgets.IntRangeSlider(
-        value=[0, 20],
-        min=0,
-        max=int(fs / 2),  # Nyquist limit
-        step=1,
-        description='Freq (Hz):',
-        continuous_update=False,  # Updates plot only when you release the mouse
-        layout={'width': '300px'}
-    )
-
-    #New and improved plotting function, handles both the 2D and 3D npy_data
+    time_in_sec = n_timepoints//fs
+    nyquist = fs//2
+    #2. plotting function, handles both the 2D and 3D npy_data
     def plot_data(domain, selected_series, freq_range, epoch_idx=0):
         plt.figure(figsize=(10, 5))
     
@@ -1126,15 +1198,18 @@ def showmesummaryplot(npy_data, meta_data):
                 series_data = npy_data[:, s_idx]
             
             if domain == 'Time':
-                plt.plot(time_vector, series_data, label=labels[s_idx])
+                time_min, time_max = freq_range
+                idx = (time_vector<=time_max) & (time_vector>=time_min)
+                plt.plot(time_vector[idx], series_data[idx], label=labels[s_idx])
                 plt.xlabel("Time (s)")
                 plt.ylabel(r"Amplitude ($\mu$V)")
+                plt.xlim(time_min,time_max)
                 
             elif domain == 'Frequency':
                 # Compute FFT
                 fft_vals = np.fft.rfft(series_data)
                 fft_freqs = np.fft.rfftfreq(n_timepoints, d=1/fs)
-                scaled_fft_magnitude = (np.abs(fft_vals) / n_timepoints) * 2
+                scaled_fft_magnitude = (np.abs(fft_vals) / n_timepoints)
 
                 # Get limits from slider / configuration
                 freq_min, freq_max = freq_range
@@ -1143,18 +1218,22 @@ def showmesummaryplot(npy_data, meta_data):
                 plt.plot(fft_freqs[idx], scaled_fft_magnitude[idx], label=labels[s_idx])
                 plt.xlabel("Frequency (Hz)")
                 plt.ylabel(r"Magnitude ($\mu$V)")
-                plt.xlim(freq_min, freq_max)
 
+                # Apply the 1.2 Hz tick marks specifically when in the Frequency domain
+                plt.gca().xaxis.set_major_locator(ticker.MultipleLocator(1.2))
+                # Rotate labels slightly if they crowd each other at wide ranges                
+                plt.xticks(rotation=45)
+                
+                plt.xlim(freq_min, freq_max)
+                
+                if ylim == None:
+                    plt.ylim(0,ylim)
+        
         plt.legend(loc='upper left', bbox_to_anchor=(1, 1))
         plt.grid(True, linestyle='--', alpha=0.6)
-        # Apply the 1.2 Hz tick marks specifically when in the Frequency domain
-        if domain == 'Frequency':
-            plt.gca().xaxis.set_major_locator(ticker.MultipleLocator(1.2))
-            # Rotate labels slightly if they crowd each other at wide ranges
-            plt.xticks(rotation=45) 
             
         title_suffix = f" | Epoch: {epoch_idx}" if len(npy_data.shape) == 3 else ""
-        plt.title(f"Domain: {domain}{title_suffix}")
+        plt.title(f"SUbject id: {meta_data['name']} Domain: {domain}{title_suffix}")
         plt.show()
             
     # 3. Base UI Widgets
@@ -1162,9 +1241,17 @@ def showmesummaryplot(npy_data, meta_data):
         options=['Time', 'Frequency'],
         value='Time',
         description='Domain:',
-        button_style='info'
-    )
-
+        button_style='info')
+    
+    freq_slider = widgets.IntRangeSlider(
+        value=[0, time_in_sec] ,
+        min=0,
+        max=time_in_sec,
+        step=1,
+        description='Time(s):',
+        continuous_update=False,  # Updates plot only when you release the mouse
+        layout={'width': '300px'})
+    
     series_selector = widgets.SelectMultiple(
         options=[(labels[i], i) for i in range(npy_data.shape[1])],
         value=[0, 1, 2, 3],  
@@ -1173,12 +1260,6 @@ def showmesummaryplot(npy_data, meta_data):
     )
 
     # 4. Handle 2D vs 3D Layout Setup
-    widget_dict = {
-        'domain': domain_switch,
-        'selected_series': series_selector,
-        'freq_range': freq_slider
-    }
-
     if len(npy_data.shape) == 3:
         epoch_selector = widgets.Select(
             options=[(f"Ep: {i}", i) for i in range(npy_data.shape[2])],
@@ -1190,31 +1271,153 @@ def showmesummaryplot(npy_data, meta_data):
         controls = widgets.VBox([epoch_selector, series_selector])
     else:
         controls = widgets.VBox([series_selector])
+    
+    ### NEW CODE CHANGED HERE
+    def on_domain_change(change):
+        # Set max first, then value, so the value isn't clamped to the old max
+        if change['new'] == 'Frequency':
+            freq_slider.max = nyquist
+            freq_slider.value = [0,20]
+            freq_slider.description = 'Freq (Hz):'
+        else:
+            freq_slider.max = time_in_sec
+            freq_slider.value = [0, time_in_sec]
+            freq_slider.description = 'Time (s):'
 
+    domain_switch.observe(on_domain_change, names='value')
+    
+    #defining the new widget dictionary
+    widget_dict = {'domain': domain_switch,
+                   'selected_series': series_selector,
+                   'freq_range': freq_slider}
+
+    
     out = widgets.interactive_output(plot_data, widget_dict)
 
-        # 5. Dynamic Slider Visibility (Shows slider ONLY during Frequency Mode)
-    def toggle_slider_visibility(change):
-        if change['new'] == 'Frequency':
-            freq_slider.layout.display = 'block'
-        else:
-            freq_slider.layout.display = 'none'
-
-    domain_switch.observe(toggle_slider_visibility, names='value')
-    freq_slider.layout.display = 'none'  # Hidden by default because default is 'Time'
-
-    # 6. Render Layout
-    # Create a small spacer to separate the switch and the slider nicely
     spacer = widgets.Box(layout=widgets.Layout(width='40px'))
-
-    # CHANGE THIS: Use HBox instead of VBox to place them side by side
     top_bar = widgets.HBox([domain_switch, spacer, freq_slider])
+    display(widgets.VBox([top_bar, widgets.HBox([controls, out])]))
+
+
     
-    main_layout = widgets.VBox([
-        top_bar, 
-        widgets.HBox([controls, out])
-    ])
-    display(main_layout)
+# def showmesummaryplot_postprocessing(npy_data, meta_data):
+#     fs = meta_data["fs"]
+#     labels = np.squeeze(meta_data["chanlocs"]["labels"])
+#     labels = labels.astype(str)
+#     n_timepoints = npy_data.shape[0]
+
+#     # 1. New Frequency Range Widget
+#     freq_slider = widgets.IntRangeSlider(
+#         value=[0, 20],
+#         min=0,
+#         max=int(fs / 2),  # Nyquist limit
+#         step=1,
+#         description='time/Freq (s/Hz):',
+#         continuous_update=False,  # Updates plot only when you release the mouse
+#         layout={'width': '300px'}
+#     )
+
+#     #New and improved plotting function, handles both the 2D and 3D npy_data
+#     def plot_data(domain, selected_series, freq_range, epoch_idx=0):
+#         plt.figure(figsize=(10, 5))
+    
+#         if not selected_series:
+#             plt.text(0.5, 0.5, "Select channels from the list", ha='center', va='center')
+#             plt.show()
+#             return
+    
+#         time_vector = np.arange(n_timepoints) / fs
+    
+#         for s_idx in selected_series:
+#             # Safely handle both 2D and 3D shapes
+#             if len(npy_data.shape) == 3:
+#                 series_data = npy_data[:, s_idx, epoch_idx]
+#             else:
+#                 series_data = npy_data[:, s_idx]
+            
+#             if domain == 'Time
+#                 time_min
+#                 plt.plot(time_vector, series_data, label=labels[s_idx])
+#                 plt.xlabel("Time (s)")
+#                 plt.ylabel(r"Amplitude ($\mu$V)")
+                
+#             elif domain == 'Frequency':
+#                 # Compute FFT
+#                 fft_vals = np.fft.rfft(series_data)
+#                 fft_freqs = np.fft.rfftfreq(n_timepoints, d=1/fs)
+#                 scaled_fft_magnitude = (np.abs(fft_vals) / n_timepoints) * 2
+
+#                 # Get limits from slider / configuration
+#                 freq_min, freq_max = freq_range
+#                 idx = np.where((fft_freqs >= freq_min) & (fft_freqs <= freq_max))
+
+#                 plt.plot(fft_freqs[idx], scaled_fft_magnitude[idx], label=labels[s_idx])
+#                 plt.xlabel("Frequency (Hz)")
+#                 plt.ylabel(r"Magnitude ($\mu$V)")
+#                 plt.xlim(freq_min, freq_max)
+
+#         plt.legend(loc='upper left', bbox_to_anchor=(1, 1))
+#         plt.grid(True, linestyle='--', alpha=0.6)
+#         # Apply the 1.2 Hz tick marks specifically when in the Frequency domain
+#         if domain == 'Frequency':
+#             plt.gca().xaxis.set_major_locator(ticker.MultipleLocator(1.2))
+#             # Rotate labels slightly if they crowd each other at wide ranges
+#             plt.xticks(rotation=45) 
+            
+#         title_suffix = f" | Epoch: {epoch_idx}" if len(npy_data.shape) == 3 else ""
+#         plt.title(f"Subject ID: {meta_data['name']}\nDomain: {domain}{title_suffix}")
+#         plt.show()
+            
+#     # 3. Base UI Widgets
+#     series_selector = widgets.SelectMultiple(
+#         options=[(labels[i], i) for i in range(npy_data.shape[1])],
+#         value=[0, 1, 2, 3],  
+#         description='Ch Name:',
+#         layout={'height': '225px' if len(npy_data.shape) == 3 else '400px', 'width': '150px'}
+#     )
+
+#     # 4. Handle 2D vs 3D Layout Setup
+#     widget_dict = {
+#         'selected_series': series_selector,
+#         'freq_range': freq_slider
+#     }
+
+#     if len(npy_data.shape) == 3:
+#         epoch_selector = widgets.Select(
+#             options=[(f"Ep: {i}", i) for i in range(npy_data.shape[2])],
+#             value=0,
+#             description='Epoch:',
+#             layout={'height': '225px', 'width': '150px'}
+#         )
+#         widget_dict['epoch_idx'] = epoch_selector
+#         controls = widgets.VBox([epoch_selector, series_selector])
+#     else:
+#         controls = widgets.VBox([series_selector])
+
+#     out = widgets.interactive_output(plot_data, widget_dict)
+
+#     # 5. Dynamic Slider Visibility (Shows slider ONLY during Frequency Mode)
+#     # def toggle_slider_visibility(change):
+#     #     if change['new'] == 'Frequency':
+#     #         freq_slider.layout.display = 'block'
+#     #     else:
+#     #         freq_slider.layout.display = 'none'
+
+#     domain_switch.observe(toggle_slider_visibility, names='value')
+#     freq_slider.layout.display = 'none'  # Hidden by default because default is 'Time'
+
+#     # 6. Render Layout
+#     # Create a small spacer to separate the switch and the slider nicely
+#     spacer = widgets.Box(layout=widgets.Layout(width='40px'))
+
+#     # CHANGE THIS: Use HBox instead of VBox to place them side by side
+#     top_bar = widgets.HBox([domain_switch, spacer, freq_slider])
+    
+#     main_layout = widgets.VBox([
+#         top_bar, 
+#         widgets.HBox([controls, out])
+#     ])
+#     display(main_layout)
 
 def showmesummaryplot_alt(npy_data, meta_data):
     """
