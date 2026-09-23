@@ -864,3 +864,364 @@ def hilbert_bands(npy_data, meta_data, freq_start=50, freq_end=300,
     meta_data["filetype"] = "time_frequency_amplitude"
     meta_data.pop("events", None)
     return modulation, _refresh_shape(modulation, meta_data)
+
+
+# ---------------------------------------------------------------------------
+# events
+#
+# Letswave keeps events as a struct array, one struct per event with code,
+# latency and epoch. This project keeps the same three fields as parallel lists
+# inside meta_data["events"]. These helpers move between the two shapes so the
+# ports below can think one event at a time the way the MATLAB does.
+# ---------------------------------------------------------------------------
+
+def events_to_list(meta_data):
+    """meta_data["events"] as a list of {code, latency, epoch} dicts."""
+    events = meta_data.get("events")
+    if not events:
+        return []
+    codes = np.atleast_1d(np.asarray(events.get("code", []), dtype=object))
+    latencies = np.atleast_1d(np.asarray(events.get("latency", []), dtype=object))
+    epochs = np.atleast_1d(np.asarray(events.get("epoch", []), dtype=object))
+    out = []
+    for i in range(len(codes)):
+        out.append({
+            "code": codes[i],
+            "latency": float(latencies[i]) if i < len(latencies) else 0.0,
+            "epoch": int(epochs[i]) if i < len(epochs) and epochs[i] is not None else 0,
+        })
+    return out
+
+
+def events_from_list(meta_data, events):
+    """Write a list of event dicts back into meta_data, in place."""
+    meta_data["events"] = {
+        "code": np.array([e["code"] for e in events], dtype=object),
+        "latency": np.array([e["latency"] for e in events], dtype=float),
+        "epoch": np.array([e["epoch"] for e in events], dtype=int),
+    }
+    return meta_data
+
+
+def _remap_epochs(meta_data, kept_epochs):
+    """Keep the events of the epochs that survived and renumber them.
+
+    kept_epochs is the list of original epoch numbers in their new order, so
+    an event on old epoch kept_epochs[i] ends up on epoch i.
+    """
+    events = events_to_list(meta_data)
+    if not events:
+        return meta_data
+    new_position = {old: new for new, old in enumerate(kept_epochs)}
+    kept = []
+    for event in events:
+        if event["epoch"] in new_position:
+            event = dict(event)
+            event["epoch"] = new_position[event["epoch"]]
+            kept.append(event)
+    return events_from_list(meta_data, kept)
+
+
+# ---------------------------------------------------------------------------
+# RLW_arrange_index and RLW_merge_index
+#
+# Letswave's third dimension, "index", holds things like the separate
+# components of a decomposition. This pipeline never fills it, so the data here
+# is 3-D and these two functions work on a fourth axis when one exists.
+# ---------------------------------------------------------------------------
+
+def arrange_index(npy_data, meta_data, index_idx):
+    """Keep, reorder or drop indexes. Port of RLW_arrange_index.
+
+    index_idx is 0-based. With 3-D data there is no index axis and nothing
+    happens.
+    """
+    data = np.asarray(npy_data)
+    meta_data = dict(meta_data)
+    if data.ndim < 4:
+        print("no index axis in this dataset, nothing to arrange")
+        return data, meta_data
+
+    index_idx = np.atleast_1d(np.asarray(index_idx, dtype=int))
+    out = np.take(data, index_idx, axis=3)
+    labels = meta_data.get("index_labels")
+    if labels is not None:
+        meta_data["index_labels"] = [labels[i] for i in index_idx]
+    print(f"number of indexes: {len(index_idx)}")
+    return out, _refresh_shape(out, meta_data)
+
+
+def merge_index(datasets):
+    """Stack several datasets along the index axis. Port of RLW_merge_index.
+
+    datasets is a list of (npy_data, meta_data) pairs, all the same shape. The
+    header of the first one is kept, the index labels and events of all of them
+    are concatenated, and duplicate events are dropped the way Letswave does.
+    """
+    if not datasets:
+        raise ValueError("no datasets to merge")
+
+    first_data, first_meta = datasets[0]
+    out = np.asarray(first_data)
+    if out.ndim < 4:
+        out = out[..., None]
+    meta_data = dict(first_meta)
+
+    labels = list(meta_data.get("index_labels")
+                  or [f"index {i}" for i in range(out.shape[3])])
+    events = events_to_list(meta_data)
+
+    for data, meta in datasets[1:]:
+        data = np.asarray(data)
+        if data.ndim < 4:
+            data = data[..., None]
+        if data.shape[:3] != out.shape[:3]:
+            raise ValueError("datasets cannot be merged as their sizes do not match: "
+                             f"{out.shape[:3]} against {data.shape[:3]}")
+        out = np.concatenate([out, data], axis=3)
+        labels += list(meta.get("index_labels")
+                       or [f"index {i}" for i in range(data.shape[3])])
+        events += events_to_list(meta)
+
+    # drop events that are identical in all three fields
+    seen, unique = set(), []
+    for event in events:
+        key = (str(event["code"]), event["latency"], event["epoch"])
+        if key not in seen:
+            seen.add(key)
+            unique.append(event)
+    if len(unique) != len(events):
+        print(f"deleted {len(events) - len(unique)} duplicate events")
+
+    meta_data["index_labels"] = labels
+    meta_data["history"] = {}
+    meta_data = events_from_list(meta_data, unique)
+    print(f"merged {len(datasets)} datasets into {out.shape[3]} indexes")
+    return out, _refresh_shape(out, meta_data)
+
+
+# ---------------------------------------------------------------------------
+# RLW_concatenate_epochs
+# ---------------------------------------------------------------------------
+
+def concatenate_epochs(npy_data, meta_data, epoch_idx=None):
+    """Lay the chosen epochs end to end into one long epoch.
+
+    Port of RLW_concatenate_epochs. epoch_idx is 0-based; leave it out to take
+    every epoch. Event latencies are shifted by the duration of the epochs in
+    front of them, as in Letswave.
+    """
+    data, _ = _as3d(np.asarray(npy_data))
+    meta_data = dict(meta_data)
+
+    if epoch_idx is None:
+        epoch_idx = np.arange(data.shape[2])
+    epoch_idx = np.atleast_1d(np.asarray(epoch_idx, dtype=int))
+    print(f"concatenating {len(epoch_idx)} epochs")
+
+    picked = data[:, :, epoch_idx]
+    out = np.concatenate([picked[:, :, i] for i in range(picked.shape[2])], axis=0)
+    out = out[:, :, None]
+
+    duration = data.shape[0] * xstep(meta_data)
+    events, kept = events_to_list(meta_data), []
+    for position, old_epoch in enumerate(epoch_idx):
+        for event in events:
+            if event["epoch"] == old_epoch:
+                event = dict(event)
+                event["latency"] = event["latency"] + duration * position
+                event["epoch"] = 0
+                kept.append(event)
+    meta_data = events_from_list(meta_data, kept)
+
+    return out, _refresh_shape(out, meta_data)
+
+
+# ---------------------------------------------------------------------------
+# RLW_equalize_epochs
+# ---------------------------------------------------------------------------
+
+def equalize_epochs(datasets, num_epochs=None, random_selection=False, seed=None):
+    """Cut every dataset down to the same number of epochs.
+
+    Port of RLW_equalize_epochs. datasets is a list of (npy_data, meta_data)
+    pairs. With num_epochs left out the smallest dataset sets the count. With
+    random_selection the epochs are drawn at random rather than taken from the
+    front; pass a seed to make that draw repeatable.
+    """
+    prepared = [(_as3d(np.asarray(d))[0], dict(m)) for d, m in datasets]
+
+    if not num_epochs:
+        num_epochs = min(d.shape[2] for d, _ in prepared)
+    num_epochs = int(num_epochs)
+    print(f"equalizing to {num_epochs} epochs")
+
+    rng = np.random.default_rng(seed)
+    out = []
+    for data, meta in prepared:
+        if random_selection:
+            epoch_idx = np.sort(rng.permutation(data.shape[2])[:num_epochs])
+        else:
+            epoch_idx = np.arange(min(num_epochs, data.shape[2]))
+
+        picked = data[:, :, epoch_idx]
+        meta = _remap_epochs(meta, list(epoch_idx))
+        if meta.get("epochdata") is not None:
+            meta["epochdata"] = [meta["epochdata"][i] for i in epoch_idx]
+        out.append((picked, _refresh_shape(picked, meta)))
+
+    return out
+
+
+# ---------------------------------------------------------------------------
+# RLW_reject_epochs and RLW_reject_epochs_amplitude
+# ---------------------------------------------------------------------------
+
+def reject_epochs(npy_data, meta_data, rejected_epochs):
+    """Throw away the named epochs. Port of RLW_reject_epochs.
+
+    rejected_epochs is 0-based. Events belonging to a rejected epoch go with it.
+    """
+    data, _ = _as3d(np.asarray(npy_data))
+    meta_data = dict(meta_data)
+
+    rejected = set(int(i) for i in np.atleast_1d(rejected_epochs))
+    accepted = [i for i in range(data.shape[2]) if i not in rejected]
+    print(f"rejecting {len(rejected)} epochs, {len(accepted)} left")
+
+    out = data[:, :, accepted]
+    meta_data = _remap_epochs(meta_data, accepted)
+    if meta_data.get("epochdata") is not None:
+        meta_data["epochdata"] = [meta_data["epochdata"][i] for i in accepted]
+    return out, _refresh_shape(out, meta_data)
+
+
+def reject_epochs_amplitude(npy_data, meta_data, criterion=100, x_limits=False,
+                            x_start=None, x_end=None, selected_channel_labels=None):
+    """Throw away the epochs that swing too far. Port of RLW_reject_epochs_amplitude.
+
+    An epoch goes when any sample in the window exceeds criterion in absolute
+    value. With x_limits the window is x_start..x_end in x-axis units rather
+    than the whole epoch, and selected_channel_labels narrows the test to those
+    channels.
+    """
+    data, _ = _as3d(np.asarray(npy_data, dtype=float))
+    meta_data = dict(meta_data)
+
+    if x_limits:
+        step, origin = xstep(meta_data), xstart(meta_data)
+        dx1 = 0 if x_start is None else max(0, int(round((x_start - origin) / step)))
+        dx2 = data.shape[0] if x_end is None else min(
+            data.shape[0], int(round((x_end - origin) / step)) + 1)
+    else:
+        dx1, dx2 = 0, data.shape[0]
+
+    if selected_channel_labels:
+        labels = [str(x) for x in np.atleast_1d(
+            np.squeeze(meta_data["chanlocs"]["labels"]))]
+        wanted = [str(x).lower() for x in np.atleast_1d(selected_channel_labels)]
+        channels = [i for i, name in enumerate(labels) if name.lower() in wanted]
+        if not channels:
+            raise ValueError("none of the selected channel labels were found")
+    else:
+        channels = list(range(data.shape[1]))
+
+    print(f"amplitude criterion {criterion}, samples {dx1} to {dx2}, "
+          f"{len(channels)} channels")
+
+    block = data[dx1:dx2][:, channels]
+    peak = np.max(np.abs(block), axis=(0, 1))
+    accepted = [i for i in range(data.shape[2]) if peak[i] <= criterion]
+    print(f"accepted epochs: {accepted}")
+
+    out = data[:, :, accepted]
+    meta_data = _remap_epochs(meta_data, accepted)
+    if meta_data.get("epochdata") is not None:
+        meta_data["epochdata"] = [meta_data["epochdata"][i] for i in accepted]
+    return out, _refresh_shape(out, meta_data)
+
+
+# ---------------------------------------------------------------------------
+# RLW_select_epochdata and RLW_sort_epochdata
+#
+# Letswave hangs a record on each epoch - reaction time, response, whatever the
+# experiment logged - in header.epochdata. Here that is meta_data["epochdata"],
+# a list with one dict per epoch.
+# ---------------------------------------------------------------------------
+
+_COMPARISONS = {
+    "==": lambda a, b: a == b, "=": lambda a, b: a == b,
+    "~=": lambda a, b: a != b, "!=": lambda a, b: a != b,
+    ">": lambda a, b: a > b, "<": lambda a, b: a < b,
+    ">=": lambda a, b: a >= b, "<=": lambda a, b: a <= b,
+}
+
+
+def _epochdata_values(meta_data, fieldname, n_epochs):
+    """The value of one epochdata field per epoch, None where it is missing."""
+    records = meta_data.get("epochdata")
+    if not records:
+        raise ValueError("no epoch data available")
+    values = []
+    for i in range(n_epochs):
+        record = records[i] if i < len(records) else {}
+        value = record.get("data", record).get(fieldname) if isinstance(record, dict) else None
+        values.append(value)
+    return values
+
+
+def select_epochdata(npy_data, meta_data, fieldname, logical="==", comparison_value=0):
+    """Keep the epochs whose epochdata field passes a test.
+
+    Port of RLW_select_epochdata. logical is ==, ~=, >, <, >= or <=. Epochs
+    with no value, or a value that is not a number, are dropped, as in Letswave.
+    """
+    try:
+        compare = _COMPARISONS[str(logical)]
+    except KeyError:
+        raise ValueError(f"logical must be one of {sorted(_COMPARISONS)}, got {logical!r}")
+
+    data, _ = _as3d(np.asarray(npy_data))
+    meta_data = dict(meta_data)
+
+    values = _epochdata_values(meta_data, fieldname, data.shape[2])
+    accepted = [i for i, value in enumerate(values)
+                if isinstance(value, (int, float, np.number))
+                and compare(value, comparison_value)]
+    print(f"found {len(accepted)} epochs meeting the criterion")
+
+    out = data[:, :, accepted]
+    meta_data = _remap_epochs(meta_data, accepted)
+    meta_data["epochdata"] = [meta_data["epochdata"][i] for i in accepted]
+    return out, _refresh_shape(out, meta_data)
+
+
+def sort_epochdata(npy_data, meta_data, fieldname, sort_direction="ascend",
+                   discard_empty=True):
+    """Reorder the epochs by an epochdata field. Port of RLW_sort_epochdata.
+
+    Epochs with no usable value are dropped, or appended at the end when
+    discard_empty is False.
+    """
+    data, _ = _as3d(np.asarray(npy_data))
+    meta_data = dict(meta_data)
+
+    values = _epochdata_values(meta_data, fieldname, data.shape[2])
+    sortable = [(i, v) for i, v in enumerate(values)
+                if isinstance(v, (int, float, np.number))]
+    missing = [i for i, v in enumerate(values)
+               if not isinstance(v, (int, float, np.number))]
+    print(f"found {len(sortable)} epochs to sort")
+
+    sortable.sort(key=lambda pair: pair[1],
+                  reverse=str(sort_direction).lower().startswith("desc"))
+    order = [i for i, _ in sortable]
+    if missing and not discard_empty:
+        print(f"appending discarded epochs: {missing}")
+        order += missing
+    print(f"sort order: {order}")
+
+    out = data[:, :, order]
+    meta_data = _remap_epochs(meta_data, order)
+    meta_data["epochdata"] = [meta_data["epochdata"][i] for i in order]
+    return out, _refresh_shape(out, meta_data)
