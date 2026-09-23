@@ -1928,3 +1928,280 @@ def weighted_channel_average_apply(npy_data, meta_data, template_weights,
     meta_data["chanlocs"] = _chanlocs_from_labels(["chanavg"])
     print("applied the weighted channel average template")
     return out, _refresh_shape(out, meta_data)
+
+
+# ---------------------------------------------------------------------------
+# RLW_ICA_unmix, RLW_ICA_remix and RLW_PCA_compute
+#
+# Letswave hides the mixing and unmixing matrices in the dataset history and
+# digs them back out. Here they are passed in, which is the same information
+# without the archaeology; performICA in FPyVS_appylication already produces an
+# mne ICA object, and these are for working with the matrices directly.
+# ---------------------------------------------------------------------------
+
+def ica_unmix(npy_data, meta_data, ica_um):
+    """Turn channels into components. Port of RLW_ICA_unmix.
+
+    ica_um is the unmixing matrix, one row per component. Returns the component
+    time courses, labelled IC1, IC2 and so on, together with the channel
+    information the components replaced so ica_remix can put it back.
+    """
+    data, _ = _as3d(np.asarray(npy_data, dtype=float))
+    meta_data = dict(meta_data)
+
+    ica_um = np.asarray(ica_um, dtype=float)
+    original_chanlocs = meta_data.get("chanlocs")
+
+    out = np.einsum("ij,xje->xie", ica_um, data)
+    meta_data["chanlocs"] = _chanlocs_from_labels(
+        [f"IC{i + 1}" for i in range(ica_um.shape[0])])
+    meta_data["old_chanlocs"] = original_chanlocs
+    print(f"ICA unmix into {out.shape[1]} components")
+    return out, _refresh_shape(out, meta_data), original_chanlocs
+
+
+def ica_remix(npy_data, meta_data, ica_mm, ic_list=None, old_chanlocs=None):
+    """Turn components back into channels. Port of RLW_ICA_remix.
+
+    ica_mm is the mixing matrix. ic_list names the components to keep (0-based);
+    the columns of the others are zeroed, which is how a blink component is
+    removed. old_chanlocs restores the original labels, and ica_unmix leaves a
+    copy in the metadata for exactly that.
+    """
+    data, _ = _as3d(np.asarray(npy_data, dtype=float))
+    meta_data = dict(meta_data)
+
+    ica_mm = np.array(ica_mm, dtype=float, copy=True)
+    if ic_list is not None:
+        keep = set(int(i) for i in np.atleast_1d(ic_list))
+        print(f"selected ICs: {sorted(keep)}")
+        for column in range(ica_mm.shape[1]):
+            if column not in keep:
+                ica_mm[:, column] = 0
+
+    out = np.einsum("ij,xje->xie", ica_mm, data)
+
+    chanlocs = old_chanlocs if old_chanlocs is not None else meta_data.get("old_chanlocs")
+    if chanlocs is not None:
+        print("found the original channel information")
+        meta_data["chanlocs"] = chanlocs
+    else:
+        print("did not find the original channel information, "
+              "computing dummy channel labels")
+        meta_data["chanlocs"] = _chanlocs_from_labels(
+            [f"C{i + 1}" for i in range(out.shape[1])])
+    meta_data.pop("old_chanlocs", None)
+    return out, _refresh_shape(out, meta_data)
+
+
+def pca_compute(npy_data, meta_data=None):
+    """Principal components of the channel covariance. Port of RLW_PCA_compute.
+
+    Returns {"ica_mm": mixing, "ica_um": unmixing}, the same pair of matrices
+    ica_unmix and ica_remix expect. The eigenvectors are ordered by eigenvalue
+    the way the original sorts them, smallest first.
+    """
+    data, _ = _as3d(np.asarray(npy_data, dtype=float))
+    print("computing PCA")
+
+    # every epoch laid end to end, one row per channel
+    flat = np.concatenate([data[:, :, e].T for e in range(data.shape[2])], axis=1)
+    covariance = flat @ flat.T
+
+    values, vectors = np.linalg.eigh(covariance)
+    order = np.argsort(values)
+    vectors = vectors[:, order]
+
+    return {"ica_mm": vectors, "ica_um": np.linalg.inv(vectors)}
+
+
+# ---------------------------------------------------------------------------
+# RLW_ocular_remove
+# ---------------------------------------------------------------------------
+
+def ocular_remove(npy_data, meta_data, eog_channels):
+    """Regress the eye channels out of every channel. Port of RLW_ocular_remove.
+
+    For each channel a least squares fit against the EOG channels and a constant
+    gives the weight of the eye signal in it, and that much EOG is subtracted.
+    Cheaper than ICA, and it leaves the EOG channels themselves in place.
+    """
+    data, _ = _as3d(np.asarray(npy_data, dtype=float))
+    meta_data = dict(meta_data)
+
+    eog_idx = (find_channels(meta_data, eog_channels)
+               if not np.issubdtype(np.asarray(eog_channels).dtype, np.number)
+               else [int(i) for i in np.atleast_1d(eog_channels)])
+    if not eog_idx:
+        return data, meta_data
+    print(f"regressing out EOG channels {eog_idx}")
+
+    n_samples = data.shape[0] * data.shape[2]
+    eog = np.stack([data[:, i, :].reshape(n_samples) for i in eog_idx], axis=1)
+    design = np.column_stack([eog, np.ones(n_samples)])
+
+    out = data.copy()
+    for channel in range(data.shape[1]):
+        y = data[:, channel, :].reshape(n_samples)
+        coefficients, *_ = np.linalg.lstsq(design, y, rcond=None)
+        for position, i in enumerate(eog_idx):
+            out[:, channel, :] -= coefficients[position] * data[:, i, :]
+
+    return out, _refresh_shape(out, meta_data)
+
+
+# ---------------------------------------------------------------------------
+# RLW_suppress_artifact and RLW_suppress_artifact_event
+# ---------------------------------------------------------------------------
+
+def suppress_artifact(npy_data, meta_data, x_start=-0.005, x_end=0.005):
+    """Draw a straight line across a window. Port of RLW_suppress_artifact.
+
+    Replaces everything between x_start and x_end with a line joining the two
+    end samples, which is the usual way a stimulation artifact is removed.
+    """
+    data, _ = _as3d(np.asarray(npy_data, dtype=float))
+    meta_data = dict(meta_data)
+    step, origin = xstep(meta_data), xstart(meta_data)
+
+    dx1 = int((x_start - origin) / step)
+    dx2 = int((x_end - origin) / step)
+    dx1, dx2 = max(0, dx1), min(data.shape[0] - 1, dx2)
+    print(f"suppressing the artifact between samples {dx1} and {dx2}")
+    if dx2 <= dx1:
+        return data, meta_data
+
+    out = data.copy()
+    span = np.arange(dx2 - dx1 + 1) / (dx2 - dx1)
+    left, right = data[dx1], data[dx2]
+    out[dx1:dx2 + 1] = left + span[:, None, None] * (right - left)
+    return out, _refresh_shape(out, meta_data)
+
+
+def suppress_artifact_event(npy_data, meta_data, event_code, x_start=-0.005,
+                            x_end=0.005, interp_method="spline"):
+    """Interpolate over the artifact around each event.
+
+    Port of RLW_suppress_artifact_event. Every event with that code marks a
+    window; the samples inside all the windows are thrown away and the trace is
+    interpolated back over them from the samples that remain.
+    interp_method is spline, linear or nearest.
+    """
+    kind = {"spline": "cubic", "cubic": "cubic", "linear": "linear",
+            "nearest": "nearest"}.get(str(interp_method).lower(), "cubic")
+
+    data, _ = _as3d(np.asarray(npy_data, dtype=float))
+    meta_data = dict(meta_data)
+    step, origin = xstep(meta_data), xstart(meta_data)
+    n = data.shape[0]
+
+    blanked = {epoch: set() for epoch in range(data.shape[2])}
+    for event in events_to_list(meta_data):
+        if str(event["code"]).lower() != str(event_code).lower():
+            continue
+        latency = event["latency"]
+        dx1 = int((latency + x_start - origin) / step)
+        dx2 = int((latency + x_end - origin) / step)
+        epoch = event["epoch"]
+        if epoch in blanked:
+            blanked[epoch].update(range(max(0, dx1), min(n, dx2 + 1)))
+
+    out = data.copy()
+    for epoch, removed in blanked.items():
+        if not removed:
+            continue
+        keep = np.array([i for i in range(n) if i not in removed])
+        if keep.size < 4:
+            print(f"epoch {epoch}: too little left to interpolate, skipped")
+            continue
+        print(f"epoch {epoch}: interpolating over {len(removed)} samples")
+        out[:, :, epoch] = interp1d(keep, data[keep, :, epoch], axis=0, kind=kind,
+                                    bounds_error=False,
+                                    fill_value="extrapolate")(np.arange(n))
+
+    return out, _refresh_shape(out, meta_data)
+
+
+# ---------------------------------------------------------------------------
+# RLW_segmentation_SSEP
+# ---------------------------------------------------------------------------
+
+def segmentation_ssep(npy_data, meta_data, event_labels, cycle_skip=0,
+                      cycle_total=1, cycle_frequency=1.0):
+    """Cut epochs that hold a whole number of stimulation cycles.
+
+    Port of RLW_segmentation_SSEP. The epoch starts cycle_skip cycles after the
+    trigger and runs for cycle_total - cycle_skip cycles, so at
+    cycle_frequency 1.2 Hz with 64 cycles every epoch holds exactly 64 periods
+    of the oddball and the FFT lands on the bin.
+    """
+    data, _ = _as3d(np.asarray(npy_data, dtype=float))
+    meta_data = dict(meta_data)
+    step, origin = xstep(meta_data), xstart(meta_data)
+
+    events = events_to_list(meta_data)
+    if not events:
+        print("no events, nothing to segment")
+        return data, meta_data
+
+    wanted = [str(label).lower() for label in np.atleast_1d(event_labels)]
+    matching = [e for e in events if str(e["code"]).lower() in wanted]
+    if not matching:
+        print("event code not found in dataset")
+        return data, meta_data
+    print(f"{len(matching)} corresponding events found in dataset")
+
+    x_start = cycle_skip / cycle_frequency
+    duration = (cycle_total - cycle_skip) / cycle_frequency
+    dxsize = int(round(duration / step))
+
+    epochs, kept_events = [], []
+    for position, trigger in enumerate(matching):
+        dx1 = int(round((trigger["latency"] + x_start - origin) / step))
+        dx2 = dx1 + dxsize
+        if dx1 < 0 or dx2 > data.shape[0]:
+            print(f"event at {trigger['latency']} falls outside the data, skipped")
+            continue
+        epochs.append(data[dx1:dx2, :, trigger["epoch"]])
+
+        for event in events:
+            if event["epoch"] != trigger["epoch"]:
+                continue
+            new_latency = event["latency"] - trigger["latency"]
+            if x_start <= new_latency <= x_start + duration:
+                kept_events.append({"code": event["code"],
+                                    "latency": new_latency,
+                                    "epoch": len(epochs) - 1})
+
+    if not epochs:
+        print("no usable epochs")
+        return data, meta_data
+
+    out = np.stack(epochs, axis=2)
+    meta_data["xstart"] = x_start
+    meta_data = events_from_list(meta_data, kept_events)
+    meta_data.pop("epochdata", None)
+    print(f"segmented into {out.shape[2]} epochs of {dxsize} samples")
+    return out, _refresh_shape(out, meta_data)
+
+
+# ---------------------------------------------------------------------------
+# RLW_edit_electrodes_SEEG
+# ---------------------------------------------------------------------------
+
+def edit_electrodes_seeg(meta_data, list_labels, list_x, list_y, list_z):
+    """Give named electrodes SEEG coordinates. Port of RLW_edit_electrodes_SEEG.
+
+    Sets X, Y and Z for each named channel and marks it as SEEG rather than
+    scalp, so it is left out of the topographies. Returns the metadata only.
+    """
+    meta_data = dict(meta_data)
+    if list_labels is None or len(list_labels) == 0:
+        return meta_data
+
+    records = []
+    for label, x, y, z in zip(list_labels, list_x, list_y, list_z):
+        print(f"setting SEEG electrode coordinate: {label}")
+        records.append({"labels": label, "X": float(x), "Y": float(y),
+                        "Z": float(z), "SEEG_enabled": 1, "topo_enabled": 0})
+    return edit_electrodes_info(meta_data, records)
