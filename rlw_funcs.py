@@ -1591,3 +1591,340 @@ def properties(meta_data, filetype=None, xstart=None, xstep=None,
         if ystep is not None:
             meta_data["ystep"] = float(ystep)
     return meta_data
+
+
+# ---------------------------------------------------------------------------
+# channels
+#
+# Letswave keeps one struct per channel in header.chanlocs. This project keeps
+# the same fields as parallel arrays inside meta_data["chanlocs"], so picking or
+# adding a channel means touching every field at once.
+# ---------------------------------------------------------------------------
+
+def channel_labels(meta_data):
+    """The channel labels as a plain list of strings."""
+    labels = meta_data.get("chanlocs", {}).get("labels", [])
+    return [str(x) for x in np.atleast_1d(np.squeeze(np.asarray(labels, dtype=object)))]
+
+
+def find_channels(meta_data, wanted, required=True):
+    """Positions of the named channels, matched without regard to case."""
+    labels = [name.lower() for name in channel_labels(meta_data)]
+    found = []
+    for name in np.atleast_1d(wanted):
+        name = str(name).lower()
+        if name in labels:
+            found.append(labels.index(name))
+        elif required:
+            raise ValueError(f"channel label {name!r} not found")
+    return found
+
+
+def select_channels(meta_data, channel_idx):
+    """A copy of the metadata keeping only those channels, in that order."""
+    meta_data = dict(meta_data)
+    chanlocs = dict(meta_data.get("chanlocs", {}))
+    for key, values in chanlocs.items():
+        values = np.atleast_1d(np.squeeze(np.asarray(values, dtype=object)))
+        if values.size >= max(channel_idx) + 1:
+            chanlocs[key] = np.array([values[i] for i in channel_idx], dtype=object)
+    meta_data["chanlocs"] = chanlocs
+    return meta_data
+
+
+def append_channel(meta_data, label, **fields):
+    """A copy of the metadata with one more channel on the end."""
+    meta_data = dict(meta_data)
+    chanlocs = dict(meta_data.get("chanlocs", {}))
+    n = len(channel_labels(meta_data))
+    for key, values in chanlocs.items():
+        values = list(np.atleast_1d(np.squeeze(np.asarray(values, dtype=object))))
+        if len(values) == n:
+            values.append(label if key == "labels" else fields.get(key, 0))
+        chanlocs[key] = np.array(values, dtype=object)
+    meta_data["chanlocs"] = chanlocs
+    return meta_data
+
+
+def _chanlocs_from_labels(labels):
+    """A minimal chanlocs for channels that are built rather than recorded."""
+    labels = list(labels)
+    return {"labels": np.array(labels, dtype=object),
+            "topo_enabled": np.zeros(len(labels), dtype=int),
+            "SEEG_enabled": np.zeros(len(labels), dtype=int)}
+
+
+# ---------------------------------------------------------------------------
+# RLW_merge_channels
+# ---------------------------------------------------------------------------
+
+def merge_channels(datasets):
+    """Put the channels of several datasets side by side. Port of RLW_merge_channels.
+
+    datasets is a list of (npy_data, meta_data) pairs that agree on everything
+    but their channels. The first header is kept, chanlocs and events are
+    concatenated, and duplicate events are dropped.
+    """
+    if not datasets:
+        raise ValueError("no datasets to merge")
+
+    out, meta_data = _as3d(np.asarray(datasets[0][0]))[0], dict(datasets[0][1])
+    labels = channel_labels(meta_data)
+    events = events_to_list(meta_data)
+
+    for data, meta in datasets[1:]:
+        block, _ = _as3d(np.asarray(data))
+        if (block.shape[0], block.shape[2]) != (out.shape[0], out.shape[2]):
+            raise ValueError("datasets cannot be merged as their sizes do not match: "
+                             f"{out.shape} against {block.shape}")
+        out = np.concatenate([out, block], axis=1)
+        labels += channel_labels(meta)
+        events += events_to_list(meta)
+
+    seen, unique = set(), []
+    for event in events:
+        key = (str(event["code"]), event["latency"], event["epoch"])
+        if key not in seen:
+            seen.add(key)
+            unique.append(event)
+
+    meta_data["chanlocs"] = _chanlocs_from_labels(labels)
+    meta_data["history"] = {}
+    meta_data = events_from_list(meta_data, unique)
+    print(f"merged into {out.shape[1]} channels")
+    return out, _refresh_shape(out, meta_data)
+
+
+# ---------------------------------------------------------------------------
+# RLW_pool_channels
+# ---------------------------------------------------------------------------
+
+def pool_channels(npy_data, meta_data, channel_labels_wanted, channel_weights=None,
+                  mixed_channel_label="newchan", keep_original_channels=True):
+    """Average several channels into a new one. Port of RLW_pool_channels.
+
+    The pooled channel is the weighted mean of the named channels; with no
+    weights they count equally. It is appended to the data, or replaces it when
+    keep_original_channels is False.
+    """
+    data, _ = _as3d(np.asarray(npy_data, dtype=float))
+    meta_data = dict(meta_data)
+
+    idx = find_channels(meta_data, channel_labels_wanted, required=False)
+    if not idx:
+        raise ValueError("selected channels not found in the dataset")
+
+    weights = (np.ones(len(idx)) if channel_weights is None
+               else np.asarray(channel_weights, dtype=float)[:len(idx)])
+    print(f"pooling {len(idx)} channels with weights {weights}")
+
+    pooled = np.tensordot(weights, data[:, idx], axes=([0], [1])) / weights.sum()
+    pooled = pooled[:, None, :] if pooled.ndim == 2 else pooled
+
+    if keep_original_channels:
+        out = np.concatenate([data, pooled], axis=1)
+        meta_data = append_channel(meta_data, mixed_channel_label)
+    else:
+        out = pooled
+        meta_data["chanlocs"] = _chanlocs_from_labels([mixed_channel_label])
+
+    return out, _refresh_shape(out, meta_data)
+
+
+# ---------------------------------------------------------------------------
+# RLW_flip_electrodes
+# ---------------------------------------------------------------------------
+
+def flip_electrodes(npy_data, meta_data, chan_label_pairs):
+    """Swap the signals of paired electrodes. Port of RLW_flip_electrodes.
+
+    chan_label_pairs is a list of two-element pairs, for example
+    [("C3", "C4"), ("P3", "P4")]. The labels stay where they are and the data
+    moves, which is how Letswave mirrors a montage left to right.
+    """
+    data, _ = _as3d(np.asarray(npy_data))
+    meta_data = dict(meta_data)
+    if not chan_label_pairs:
+        return data, meta_data
+
+    order = list(range(data.shape[1]))
+    labels = [name.lower() for name in channel_labels(meta_data)]
+    for left, right in chan_label_pairs:
+        left, right = str(left).lower(), str(right).lower()
+        if left in labels and right in labels:
+            order[labels.index(left)] = labels.index(right)
+
+    print(f"flipped {len(chan_label_pairs)} electrode pairs")
+    out = data[:, order]
+    return out, _refresh_shape(out, meta_data)
+
+
+# ---------------------------------------------------------------------------
+# RLW_edit_electrodes_info
+# ---------------------------------------------------------------------------
+
+def edit_electrodes_info(meta_data, chanlocs):
+    """Overwrite the details of named channels. Port of RLW_edit_electrodes_info.
+
+    chanlocs is a list of dicts, each with a "labels" key naming the channel it
+    describes; its other keys replace that channel's fields. Channels that are
+    not named are untouched. Returns the metadata only.
+    """
+    meta_data = dict(meta_data)
+    if not chanlocs:
+        return meta_data
+
+    existing = dict(meta_data.get("chanlocs", {}))
+    labels = [name.lower() for name in channel_labels(meta_data)]
+
+    for record in chanlocs:
+        name = str(record.get("labels", "")).lower()
+        if name not in labels:
+            continue
+        position = labels.index(name)
+        for key, value in record.items():
+            if key == "labels":
+                continue
+            values = list(np.atleast_1d(np.squeeze(
+                np.asarray(existing.get(key, np.zeros(len(labels))), dtype=object))))
+            while len(values) < len(labels):
+                values.append(0)
+            values[position] = value
+            existing[key] = np.array(values, dtype=object)
+
+    meta_data["chanlocs"] = existing
+    print(f"edited the info of {len(chanlocs)} electrodes")
+    return meta_data
+
+
+# ---------------------------------------------------------------------------
+# RLW_rereference_advanced
+# ---------------------------------------------------------------------------
+
+def rereference_advanced(npy_data, meta_data, active_channel_labels,
+                         reference_channel_labels):
+    """Build a custom montage. Port of RLW_rereference_advanced.
+
+    Pairs each active channel with its own reference and returns one channel per
+    pair, labelled "active-reference". Unlike globalreferencing, which takes one
+    average reference for everything, this is how a bipolar montage is made.
+    """
+    data, _ = _as3d(np.asarray(npy_data, dtype=float))
+    meta_data = dict(meta_data)
+
+    active = np.atleast_1d(active_channel_labels)
+    reference = np.atleast_1d(reference_channel_labels)
+    if len(active) != len(reference):
+        raise ValueError("there must be one reference channel per active channel")
+
+    active_idx = find_channels(meta_data, active)
+    reference_idx = find_channels(meta_data, reference)
+
+    out = data[:, active_idx] - data[:, reference_idx]
+    meta_data["chanlocs"] = _chanlocs_from_labels(
+        [f"{a}-{r}" for a, r in zip(active, reference)])
+    print(f"rereferenced into {out.shape[1]} bipolar channels")
+    return out, _refresh_shape(out, meta_data)
+
+
+# ---------------------------------------------------------------------------
+# RLW_linear_channel_map
+# ---------------------------------------------------------------------------
+
+def linear_channel_map(npy_data, meta_data, num_lines=100):
+    """Interpolate across channels into an image. Port of RLW_linear_channel_map.
+
+    Treats the channel order as a line through the head and interpolates it onto
+    num_lines, giving one image per epoch instead of a stack of traces. Returns
+    (time, line, 1 channel, epoch).
+    """
+    from scipy.interpolate import RectBivariateSpline
+
+    data, _ = _as3d(np.asarray(npy_data, dtype=float))
+    meta_data = dict(meta_data)
+
+    n_channels = data.shape[1]
+    source = np.arange(n_channels)
+    target = np.linspace(0, n_channels - 1, int(num_lines))
+    print(f"linear channel map: {n_channels} channels onto {num_lines} lines")
+
+    out = np.empty((data.shape[0], int(num_lines), 1, data.shape[2]))
+    x = np.arange(data.shape[0])
+    for epoch in range(data.shape[2]):
+        spline = RectBivariateSpline(x, source, data[:, :, epoch],
+                                     kx=min(3, data.shape[0] - 1),
+                                     ky=min(3, n_channels - 1))
+        out[:, :, 0, epoch] = spline(x, target)
+
+    meta_data["chanlocs"] = _chanlocs_from_labels(["CSD"])
+    meta_data["ystart"] = float(target[0])
+    meta_data["ystep"] = float(target[1] - target[0]) if len(target) > 1 else 1.0
+    return out, _refresh_shape(out, meta_data)
+
+
+# ---------------------------------------------------------------------------
+# RLW_weighted_channel_average_template and _apply
+# ---------------------------------------------------------------------------
+
+def weighted_channel_average_template(npy_data, meta_data, x, num_channels=6,
+                                      selected_channels=None, epoch=0,
+                                      peakdir="max", normalize=True):
+    """Pick the channels that carry a peak, and how much each contributes.
+
+    Port of RLW_weighted_channel_average_template. Reads every channel at the
+    time x, keeps the num_channels largest (peakdir max, min or absmax) and
+    turns their values into weights. Returns (weights, labels), ready for
+    weighted_channel_average_apply.
+    """
+    data, _ = _as3d(np.asarray(npy_data, dtype=float))
+    labels = channel_labels(meta_data)
+
+    idx = (list(range(len(labels))) if selected_channels is None
+           else find_channels(meta_data, selected_channels, required=False))
+    print(f"{len(idx)} channels with matching labels")
+
+    dx = int(round((float(x) - xstart(meta_data)) / xstep(meta_data)))
+    dx = max(0, min(dx, data.shape[0] - 1))
+    values = data[dx, idx, min(epoch, data.shape[2] - 1)]
+
+    peakdir = str(peakdir).lower()
+    if peakdir == "max":
+        order = np.argsort(values)[::-1]
+    elif peakdir == "min":
+        order = np.argsort(values)
+    elif peakdir == "absmax":
+        order = np.argsort(np.abs(values))[::-1]
+    else:
+        raise ValueError(f"peakdir must be max, min or absmax, got {peakdir!r}")
+
+    order = order[:int(num_channels)]
+    weights = values[order]
+    if normalize:
+        weights = weights / weights.sum()
+
+    template_labels = [labels[idx[i]] for i in order]
+    print(f"template channels: {template_labels}")
+    return weights, template_labels
+
+
+def weighted_channel_average_apply(npy_data, meta_data, template_weights,
+                                   template_labels):
+    """Collapse the channels using a template. Port of RLW_weighted_channel_average_apply.
+
+    Returns a single channel, "chanavg", the weighted mean of the template
+    channels.
+    """
+    data, _ = _as3d(np.asarray(npy_data, dtype=float))
+    meta_data = dict(meta_data)
+
+    idx = find_channels(meta_data, template_labels, required=False)
+    weights = np.asarray(template_weights, dtype=float)
+    if len(idx) != weights.size:
+        raise ValueError("not all template channels were found, cannot apply template")
+
+    out = np.tensordot(weights, data[:, idx], axes=([0], [1])) / weights.sum()
+    out = out[:, None, :] if out.ndim == 2 else out
+
+    meta_data["chanlocs"] = _chanlocs_from_labels(["chanavg"])
+    print("applied the weighted channel average template")
+    return out, _refresh_shape(out, meta_data)
