@@ -35,10 +35,21 @@ def rebrand_lw6data(filepath):
         "SEEG_enabled" : np.squeeze(meta_data["header"]["chanlocs"][0][0]["SEEG_enabled"])
         }
 
-    allevents = meta_data["header"]["events"][0][0][0]
-    code = np.array([l[0][0] for l in allevents])
-    latency = np.array([l[1][0][0] for l in allevents])
-    epoch = np.array([l[2][0][0] for l in allevents])
+    # A recording with no triggers stores an empty events array, and indexing
+    # into that raised "index 0 is out of bounds for axis 0 with size 0".
+    # Flattening handles the singleton dimension matlab adds without collapsing
+    # a single event down to a scalar, and leaves an empty array empty.
+    allevents = np.asarray(meta_data["header"]["events"][0][0]).reshape(-1)
+
+    if allevents.size == 0:
+        print("no events found in", filepath)
+        code = np.array([], dtype=object)
+        latency = np.array([], dtype=float)
+        epoch = np.array([], dtype=float)
+    else:
+        code = np.array([l[0][0] for l in allevents])
+        latency = np.array([l[1][0][0] for l in allevents])
+        epoch = np.array([l[2][0][0] for l in allevents])
 
     events = {
         "code": code,
