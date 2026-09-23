@@ -1225,3 +1225,369 @@ def sort_epochdata(npy_data, meta_data, fieldname, sort_direction="ascend",
     meta_data = _remap_epochs(meta_data, order)
     meta_data["epochdata"] = [meta_data["epochdata"][i] for i in order]
     return out, _refresh_shape(out, meta_data)
+
+
+# ---------------------------------------------------------------------------
+# RLW_select_events and RLW_sort_events
+# ---------------------------------------------------------------------------
+
+def select_events(npy_data, meta_data, event_code, minimum_latency=0.0,
+                  maximum_latency=1.0, check_minimum_latency=True,
+                  check_maximum_latency=True):
+    """Keep the epochs that carry a given event. Port of RLW_select_events.
+
+    An epoch survives when it holds at least one event with that code whose
+    latency falls inside the window. Either end of the window can be switched
+    off with check_minimum_latency / check_maximum_latency.
+    """
+    data, _ = _as3d(np.asarray(npy_data))
+    meta_data = dict(meta_data)
+
+    events = events_to_list(meta_data)
+    if not events:
+        print("no events available, nothing selected")
+        return data, meta_data
+
+    matching = [e for e in events
+                if str(e["code"]).lower() == str(event_code).lower()]
+    if not matching:
+        print(f"no events with code {event_code!r}, nothing selected")
+        return data, meta_data
+
+    accepted = []
+    for epoch in range(data.shape[2]):
+        for event in matching:
+            if event["epoch"] != epoch:
+                continue
+            if check_minimum_latency and event["latency"] < minimum_latency:
+                continue
+            if check_maximum_latency and event["latency"] > maximum_latency:
+                continue
+            accepted.append(epoch)
+            break
+    print(f"found {len(accepted)} epochs meeting the criterion")
+
+    out = data[:, :, accepted]
+    meta_data = _remap_epochs(meta_data, accepted)
+    if meta_data.get("epochdata") is not None:
+        meta_data["epochdata"] = [meta_data["epochdata"][i] for i in accepted]
+    return out, _refresh_shape(out, meta_data)
+
+
+def sort_events(npy_data, meta_data, event_code, sort_direction="ascend",
+                discard_empty=True):
+    """Reorder the epochs by when an event happened. Port of RLW_sort_events.
+
+    Each epoch is keyed on the latency of its first event with that code.
+    Epochs without one are dropped, or appended at the end when discard_empty
+    is False.
+    """
+    data, _ = _as3d(np.asarray(npy_data))
+    meta_data = dict(meta_data)
+
+    events = events_to_list(meta_data)
+    matching = [e for e in events
+                if str(e["code"]).lower() == str(event_code).lower()]
+    if not matching:
+        print(f"no events with code {event_code!r}, nothing sorted")
+        return data, meta_data
+
+    first_latency = {}
+    for event in matching:
+        first_latency.setdefault(event["epoch"], event["latency"])
+
+    keyed = sorted(first_latency.items(), key=lambda pair: pair[1],
+                   reverse=str(sort_direction).lower().startswith("desc"))
+    order = [epoch for epoch, _ in keyed]
+    missing = [i for i in range(data.shape[2]) if i not in first_latency]
+    if missing and not discard_empty:
+        print(f"appending discarded epochs: {missing}")
+        order += missing
+    print(f"sort order: {order}")
+
+    out = data[:, :, order]
+    meta_data = _remap_epochs(meta_data, order)
+    if meta_data.get("epochdata") is not None:
+        meta_data["epochdata"] = [meta_data["epochdata"][i] for i in order]
+    return out, _refresh_shape(out, meta_data)
+
+
+# ---------------------------------------------------------------------------
+# RLW_events_delete_duplicate
+# ---------------------------------------------------------------------------
+
+def events_delete_duplicate(meta_data, exact_latencies=True, tolerance=0.1,
+                            verbose=False):
+    """Drop repeated triggers. Port of RLW_events_delete_duplicate.
+
+    Two events are the same when they share a code and an epoch and their
+    latencies match: exactly, or within tolerance seconds when exact_latencies
+    is False. The earliest of each group is the one kept. Returns the metadata
+    only, as the data is untouched.
+    """
+    meta_data = dict(meta_data)
+    events = events_to_list(meta_data)
+    if len(events) < 2:
+        return meta_data
+
+    print("finding events with identical latencies" if exact_latencies else
+          f"finding events with similar latencies, tolerance {tolerance}")
+
+    order = sorted(range(len(events)), key=lambda i: events[i]["latency"])
+    dropped = set()
+    for position, i in enumerate(order):
+        if i in dropped:
+            continue
+        for j in order[position + 1:]:
+            same_key = (str(events[j]["code"]).lower() == str(events[i]["code"]).lower()
+                        and events[j]["epoch"] == events[i]["epoch"])
+            if not same_key:
+                continue
+            gap = abs(events[i]["latency"] - events[j]["latency"])
+            if (gap == 0) if exact_latencies else (gap < tolerance):
+                dropped.add(j)
+                if verbose:
+                    print(f"event {i} = event {j}")
+
+    print(f"found {len(dropped)} duplicate events")
+    kept = [e for i, e in enumerate(events) if i not in dropped]
+    return events_from_list(meta_data, kept)
+
+
+# ---------------------------------------------------------------------------
+# RLW_events_level_trigger
+# ---------------------------------------------------------------------------
+
+def events_level_trigger(npy_data, meta_data, selected_channel, threshold=1000,
+                         min_isi=1.0, direction="ascending", event_code="trig"):
+    """Read triggers off a channel that crosses a level.
+
+    Port of RLW_events_level_trigger. Every sample past the threshold becomes a
+    candidate; candidates closer together than min_isi seconds are dropped, so
+    one crossing gives one event. The events are added to the metadata and the
+    data is returned untouched.
+    """
+    data, _ = _as3d(np.asarray(npy_data, dtype=float))
+    meta_data = dict(meta_data)
+
+    labels = [str(x) for x in np.atleast_1d(
+        np.squeeze(meta_data["chanlocs"]["labels"]))]
+    matches = [i for i, name in enumerate(labels)
+               if name.lower() == str(selected_channel).lower()]
+    if not matches:
+        raise ValueError(f"channel label {selected_channel!r} not found")
+    chanpos = matches[0]
+    print(f"selected channel position: {chanpos}")
+
+    times = xvector(data, meta_data)
+    events = events_to_list(meta_data)
+
+    for epoch in range(data.shape[2]):
+        trace = data[:, chanpos, epoch]
+        if str(direction).lower() == "ascending":
+            crossings = np.where(trace > threshold)[0]
+        elif str(direction).lower() == "descending":
+            crossings = np.where(trace < threshold)[0]
+        else:
+            raise ValueError("direction must be ascending or descending, "
+                             f"got {direction!r}")
+        if crossings.size == 0:
+            print(f"no triggers found in epoch {epoch}")
+            continue
+
+        latencies = times[crossings]
+        kept = [latencies[0]]
+        for latency in latencies[1:]:
+            if latency - kept[-1] >= min_isi:
+                kept.append(latency)
+        print(f"number of triggers found in epoch {epoch}: {len(kept)}")
+
+        for latency in kept:
+            events.append({"code": event_code, "latency": float(latency),
+                           "epoch": epoch})
+
+    return events_from_list(meta_data, events)
+
+
+# ---------------------------------------------------------------------------
+# RLW_average_epochs_sliding
+# ---------------------------------------------------------------------------
+
+_SLIDING_OPS = {
+    "average": lambda block, axis: np.mean(block, axis=axis),
+    "stdev": lambda block, axis: np.std(block, axis=axis, ddof=1),
+    "max": lambda block, axis: np.max(block, axis=axis),
+    "min": lambda block, axis: np.min(block, axis=axis),
+    "perc75": lambda block, axis: np.percentile(block, 75, axis=axis),
+    "perc25": lambda block, axis: np.percentile(block, 25, axis=axis),
+    "maxminmean": lambda block, axis: (
+        (np.max(block, axis=axis) - np.mean(block, axis=axis)) *
+        (np.mean(block, axis=axis) - np.min(block, axis=axis))),
+}
+
+
+def average_epochs_sliding(npy_data, meta_data, operation="average", width=0.2):
+    """Slide a window along x and reduce it. Port of RLW_average_epochs_sliding.
+
+    width is in x-axis units. operation is average, stdev, max, min, perc25,
+    perc75 or maxminmean. The window is centred, and it shrinks at the two ends
+    rather than wrapping, exactly as in the original.
+    """
+    try:
+        reduce = _SLIDING_OPS[str(operation).lower()]
+    except KeyError:
+        raise ValueError(f"operation must be one of {sorted(_SLIDING_OPS)}, "
+                         f"got {operation!r}")
+
+    data = np.asarray(npy_data, dtype=float)
+    meta_data = dict(meta_data)
+
+    half = int(round(round(width / xstep(meta_data)) / 2))
+    print(f"operation: {operation}, window width {width} "
+          f"({2 * half + 1} samples)")
+
+    out = np.empty_like(data)
+    for dx in range(data.shape[0]):
+        lo = max(0, dx - half)
+        hi = min(data.shape[0], dx + half + 1)
+        out[dx] = reduce(data[lo:hi], 0)
+
+    return out, _refresh_shape(out, meta_data)
+
+
+# ---------------------------------------------------------------------------
+# RLW_average_erpimage
+# ---------------------------------------------------------------------------
+
+def average_erpimage(npy_data, meta_data, num_lines=100, x_start=None,
+                     x_end=None, smooth=True, smooth_width=5):
+    """Stack the epochs into an image. Port of RLW_average_erpimage.
+
+    Every epoch becomes one line of the image. With smooth on, each line is a
+    Hann-weighted average of the neighbouring epochs, which is what makes the
+    picture readable. num_lines then resamples the epoch axis, so a hundred
+    lines can summarise any number of trials.
+
+    Returns (time, line, channel, epoch), with one epoch left.
+    """
+    data, _ = _as3d(np.asarray(npy_data, dtype=float))
+    meta_data = dict(meta_data)
+    step, origin = xstep(meta_data), xstart(meta_data)
+
+    dx1 = 0 if x_start is None else max(0, int((x_start - origin) / step))
+    dx2 = data.shape[0] if x_end is None else min(
+        data.shape[0], int((x_end - origin) / step) + 1)
+    print(f"ERP image over samples {dx1} to {dx2}, {num_lines} lines")
+
+    n_epochs = data.shape[2]
+    window = None
+    if smooth and smooth_width > 1:
+        half = int(smooth_width) // 2
+        window = np.hanning(2 * half + 1)
+        print(f"Hanning window width: {window.size}")
+    elif smooth:
+        print("Hanning window width should be > 1, no smoothing applied")
+
+    cropped = data[dx1:dx2]                       # (x, channel, epoch)
+    smoothed = cropped
+    if window is not None:
+        half = window.size // 2
+        smoothed = np.empty_like(cropped)
+        for epoch in range(n_epochs):
+            lo = max(0, epoch - half)
+            hi = min(n_epochs, epoch + half + 1)
+            weights = window[lo - epoch + half:hi - epoch + half]
+            smoothed[:, :, epoch] = np.mean(
+                cropped[:, :, lo:hi] * weights, axis=2)
+
+    if num_lines == n_epochs:
+        print("number of epochs equals number of lines, no resampling needed")
+        lines = smoothed
+        ystep_out = 1.0
+    else:
+        print("number of epochs does not equal number of lines, resampling")
+        source = np.arange(n_epochs)
+        target = np.linspace(0, n_epochs - 1, int(num_lines))
+        lines = interp1d(source, smoothed, axis=2, kind="cubic"
+                         if n_epochs > 3 else "linear")(target)
+        ystep_out = float(target[1] - target[0]) if len(target) > 1 else 1.0
+
+    out = np.moveaxis(lines, 2, 1)[..., None]     # (x, line, channel, 1 epoch)
+
+    meta_data["xstart"] = origin + dx1 * step
+    meta_data["ystart"] = 1.0
+    meta_data["ystep"] = ystep_out
+    meta_data["filetype"] = "time_epochs_amplitude"
+    for event in (events_to_list(meta_data) or []):
+        event["epoch"] = 0
+    meta_data.pop("epochdata", None)
+    return out, _refresh_shape(out, meta_data)
+
+
+# ---------------------------------------------------------------------------
+# RLW_grand_average
+# ---------------------------------------------------------------------------
+
+def grand_average(datasets, dataset_weights=None):
+    """Weighted average across datasets. Port of RLW_grand_average.
+
+    datasets is a list of (npy_data, meta_data) pairs. A dataset with several
+    epochs is averaged over its epochs first, then the datasets are combined
+    with their weights and divided by the total weight. The header of the first
+    dataset is kept.
+
+    The MATLAB passes the epoch count as the dimension argument to mean(), which
+    averages along whichever dimension that number happens to name; this takes
+    the mean over epochs, which is what the function is for.
+    """
+    if not datasets:
+        raise ValueError("no datasets to average")
+
+    if dataset_weights is None:
+        dataset_weights = [1.0] * len(datasets)
+    weights = np.asarray(dataset_weights, dtype=float)
+    if weights.size != len(datasets):
+        raise ValueError("one weight per dataset is needed")
+
+    total = None
+    for (data, meta), weight in zip(datasets, weights):
+        block, _ = _as3d(np.asarray(data, dtype=float))
+        if block.shape[2] > 1:
+            block = np.mean(block, axis=2, keepdims=True)
+        print(f"dataset: {meta.get('name', '?')} - weight: {weight}")
+        total = block * weight if total is None else total + block * weight
+
+    out = total / weights.sum()
+    meta_data = dict(datasets[0][1])
+    return out, _refresh_shape(out, meta_data)
+
+
+# ---------------------------------------------------------------------------
+# RLW_properties
+# ---------------------------------------------------------------------------
+
+def properties(meta_data, filetype=None, xstart=None, xstep=None,
+               ystart=None, ystep=None):
+    """Edit the axis and filetype fields by hand. Port of RLW_properties.
+
+    Whatever is passed is changed and the rest is left alone, which replaces the
+    change_x / change_y flags of the original. Returns the metadata only.
+    """
+    meta_data = dict(meta_data)
+    if filetype is not None:
+        print("changing filetype")
+        meta_data["filetype"] = filetype
+    if xstart is not None or xstep is not None:
+        print("changing X-axis info")
+        if xstart is not None:
+            meta_data["xstart"] = float(xstart)
+        if xstep is not None:
+            meta_data["xstep"] = float(xstep)
+            meta_data["fs"] = 1.0 / float(xstep)
+    if ystart is not None or ystep is not None:
+        print("changing Y-axis info")
+        if ystart is not None:
+            meta_data["ystart"] = float(ystart)
+        if ystep is not None:
+            meta_data["ystep"] = float(ystep)
+    return meta_data
