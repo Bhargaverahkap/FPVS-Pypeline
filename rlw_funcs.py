@@ -2205,3 +2205,471 @@ def edit_electrodes_seeg(meta_data, list_labels, list_x, list_y, list_z):
         records.append({"labels": label, "X": float(x), "Y": float(y),
                         "Z": float(z), "SEEG_enabled": 1, "topo_enabled": 0})
     return edit_electrodes_info(meta_data, records)
+
+
+# ---------------------------------------------------------------------------
+# RLW_linear_CSD
+# ---------------------------------------------------------------------------
+
+def linear_csd(npy_data, meta_data):
+    """Second spatial derivative along the channel order. Port of RLW_linear_CSD.
+
+    Each channel becomes 2*itself minus its two neighbours, so a signal shared
+    by neighbouring electrodes cancels and a local one survives. The first and
+    last channels have no pair of neighbours and are dropped.
+    """
+    data, _ = _as3d(np.asarray(npy_data, dtype=float))
+    meta_data = dict(meta_data)
+
+    if data.shape[1] <= 3:
+        raise ValueError("computing the CSD requires more than 3 channels")
+
+    out = 2 * data[:, 1:-1] - data[:, :-2] - data[:, 2:]
+    meta_data = select_channels(meta_data, list(range(1, data.shape[1] - 1)))
+    print(f"linear CSD over {out.shape[1]} channels")
+    return out, _refresh_shape(out, meta_data)
+
+
+# ---------------------------------------------------------------------------
+# RLW_scalp_CSD
+# ---------------------------------------------------------------------------
+
+def _legendre_gh(cosines, m=4, n_terms=50):
+    """The G and H kernels of the Perrin spherical spline Laplacian."""
+    g = np.zeros_like(cosines)
+    h = np.zeros_like(cosines)
+    p_previous = np.ones_like(cosines)      # P0
+    p_current = cosines.copy()              # P1
+    for n in range(1, n_terms + 1):
+        if n > 1:
+            p_previous, p_current = p_current, (
+                (2 * n - 1) * cosines * p_current - (n - 1) * p_previous) / n
+        weight = (2 * n + 1) / (n ** m * (n + 1) ** m)
+        g += weight * p_current
+        h += (2 * n + 1) / (n ** (m - 1) * (n + 1) ** (m - 1)) * p_current
+    return g / (4 * np.pi), h / (4 * np.pi)
+
+
+def scalp_csd(npy_data, meta_data, m=4, smoothing=1e-5, n_terms=50):
+    """Current source density over the scalp. Port of RLW_scalp_CSD.
+
+    The MATLAB reaches into the CSD toolbox for its G and H matrices; these are
+    computed here from the spherical spline formulation those matrices come
+    from, using the electrode coordinates in chanlocs. Only channels marked
+    topo_enabled take part, since the others have no position on the scalp.
+
+    m is the spline order and smoothing the regularisation added to G.
+    """
+    data, _ = _as3d(np.asarray(npy_data, dtype=float))
+    meta_data = dict(meta_data)
+    chanlocs = meta_data.get("chanlocs", {})
+
+    enabled = np.atleast_1d(np.squeeze(np.asarray(
+        chanlocs.get("topo_enabled", np.ones(data.shape[1])), dtype=float)))
+    idx = [i for i in range(data.shape[1]) if i < enabled.size and enabled[i] == 1]
+    if not idx:
+        raise ValueError("no channel coordinates, cannot compute the scalp CSD")
+
+    positions = np.stack([
+        np.atleast_1d(np.squeeze(np.asarray(chanlocs[axis], dtype=float)))[idx]
+        for axis in ("X", "Y", "Z")], axis=1)
+    radius = np.linalg.norm(positions, axis=1, keepdims=True)
+    if np.any(radius == 0):
+        raise ValueError("some electrodes sit at the origin, cannot project them "
+                         "onto the sphere")
+    unit = positions / radius
+
+    print("computing G and H...")
+    cosines = np.clip(unit @ unit.T, -1.0, 1.0)
+    g, h = _legendre_gh(cosines, m=m, n_terms=n_terms)
+    g = g + smoothing * np.eye(len(idx))
+
+    # G c + c0 = z with the coefficients summing to zero, then CSD = H c
+    n = len(idx)
+    system = np.zeros((n + 1, n + 1))
+    system[:n, :n] = g
+    system[:n, n] = 1.0
+    system[n, :n] = 1.0
+
+    print("computing the CSD transform...")
+    out = np.empty((data.shape[0], n, data.shape[2]))
+    for epoch in range(data.shape[2]):
+        block = data[:, idx, epoch]                       # (x, channel)
+        block = block - block.mean(axis=1, keepdims=True)  # average reference
+        rhs = np.zeros((n + 1, block.shape[0]))
+        rhs[:n] = block.T
+        coefficients = np.linalg.solve(system, rhs)[:n]
+        out[:, :, epoch] = (h @ coefficients).T
+
+    meta_data = select_channels(meta_data, idx)
+    return out, _refresh_shape(out, meta_data)
+
+
+# ---------------------------------------------------------------------------
+# RLW_wavelet_filter_build and RLW_wavelet_filter_apply
+#
+# These two carry the single-trial toolbox with them: sub_sep_cwt builds a
+# complex Morlet with the parameters Tognola proposed, model_generation turns
+# the average power into a mask, and tf_filtering multiplies each trial's
+# transform by that mask before inverting it. All three are ported here.
+# ---------------------------------------------------------------------------
+
+_WAVELET_ALPHA = 6.0      # f0, the central frequency of the mother wavelet
+_WAVELET_FB = 0.05        # bandwidth parameter
+
+
+def _sep_cwt(x, normalised_frequencies):
+    """Port of sub_sep_cwt: a complex Morlet transform, one row per frequency."""
+    x = np.asarray(x, dtype=float).ravel()
+    n = x.size
+    support = np.arange(-n, n + 1)
+    out = np.empty((len(normalised_frequencies), n), dtype=complex)
+
+    for fi, f in enumerate(normalised_frequencies):
+        u = (f / _WAVELET_ALPHA) * (-support)
+        wavelet = (np.sqrt(f / _WAVELET_ALPHA) * (np.pi * _WAVELET_FB) ** -0.5 *
+                   np.exp(2j * np.pi * _WAVELET_ALPHA * u) *
+                   np.exp(-(u * u) / _WAVELET_FB))
+        full = np.convolve(x, np.conj(wavelet))
+        out[fi] = full[n:n + n]
+    return out
+
+
+def _sep_icwt(transform, normalised_frequencies):
+    """Port of sub_sep_icwt, as a correlation rather than a double loop."""
+    frequencies = np.asarray(normalised_frequencies, dtype=float)
+    n = transform.shape[1]
+    t = np.arange(1, n + 1)
+
+    spacing = frequencies[1] - frequencies[0] if frequencies.size > 1 else 1.0
+    xx = np.arange(-1 + spacing, 1 + spacing / 2, spacing)
+    phi_t = ((np.pi * _WAVELET_FB) ** -0.5 *
+             np.exp(2j * np.pi * _WAVELET_ALPHA * xx) *
+             np.exp(-(xx * xx) / _WAVELET_FB))
+    c_phi = np.sum(np.abs(phi_t) ** 2) / 2
+
+    total = np.zeros(n, dtype=complex)
+    for fi, f in enumerate(frequencies):
+        u = (f / _WAVELET_ALPHA) * (t - 1)
+        # the wavelet at every lag, correlated with this frequency's row
+        lags = (f / _WAVELET_ALPHA) * np.arange(-(n - 1), n)
+        wavelet = (np.sqrt(f / _WAVELET_ALPHA) * (np.pi * _WAVELET_FB) ** -0.5 *
+                   np.exp(2j * np.pi * _WAVELET_ALPHA * lags) *
+                   np.exp(-(lags * lags) / _WAVELET_FB))
+        total += np.correlate(transform[fi], np.conj(wavelet), mode="same") \
+            if wavelet.size == n else fftconvolve(
+                transform[fi], np.conj(wavelet[::-1]), mode="same")
+    return np.real(total / c_phi)
+
+
+def wavelet_filter_build(npy_data, meta_data, selected_channel,
+                         start_frequency=1, end_frequency=40, frequency_step=1,
+                         threshold=0.85):
+    """Learn which parts of the time-frequency plane hold the response.
+
+    Port of RLW_wavelet_filter_build with model_generation. Averages the wavelet
+    power over trials for one channel, subtracts each frequency's own baseline,
+    and keeps the bins above the given quantile of that distribution. The mask
+    it returns feeds wavelet_filter_apply.
+
+    threshold is a proportion: 0.85 keeps the strongest 15 per cent of bins.
+    """
+    data, _ = _as3d(np.asarray(npy_data, dtype=float))
+    meta_data = dict(meta_data)
+
+    channel_idx = find_channels(meta_data, [selected_channel])[0]
+    fs = round(1.0 / xstep(meta_data))
+    frequencies = np.arange(start_frequency, end_frequency + frequency_step / 2,
+                            frequency_step)
+    normalised = frequencies / fs
+
+    trials = data[:, channel_idx, :]                      # (x, epoch)
+    print(f"building a wavelet filter from {trials.shape[1]} trials, "
+          f"{len(frequencies)} frequencies")
+
+    power = np.mean([np.abs(_sep_cwt(trials[:, i], normalised)) ** 2
+                     for i in range(trials.shape[1])], axis=0)
+
+    # baseline: the stretch before x = 0, as in the original's pre_point
+    pre_point = int(round(abs(min(0.0, xstart(meta_data))) * fs))
+    half_point = pre_point // 2
+    if pre_point > half_point:
+        baseline = power[:, half_point:pre_point].mean(axis=1, keepdims=True)
+    else:
+        baseline = power.mean(axis=1, keepdims=True)
+    normalised_power = power - baseline
+
+    cutoff = np.quantile(normalised_power, threshold)
+    mask = (normalised_power > cutoff).astype(float)
+    print(f"mask keeps {int(mask.sum())} of {mask.size} bins")
+
+    meta_data = select_channels(meta_data, [channel_idx])
+    meta_data["ystart"] = float(frequencies[0])
+    meta_data["ystep"] = float(frequency_step)
+    meta_data["freqs"] = frequencies
+    meta_data["filetype"] = "frequency_" + str(meta_data.get("filetype", "time_amplitude"))
+    return mask, _refresh_shape(mask, meta_data)
+
+
+def wavelet_filter_apply(npy_data, meta_data, mask, mask_meta_data, channel_name):
+    """Keep only the part of each trial the mask covers.
+
+    Port of RLW_wavelet_filter_apply with tf_filtering. Transforms each trial,
+    multiplies by the mask from wavelet_filter_build and transforms back.
+    Returns (x, 1 channel, epoch, 2), where the last axis holds the filtered
+    trace and then the original, the two indexes Letswave writes.
+    """
+    data, _ = _as3d(np.asarray(npy_data, dtype=float))
+    meta_data = dict(meta_data)
+
+    channel_idx = find_channels(meta_data, [channel_name])[0]
+    fs = round(1.0 / xstep(meta_data))
+    frequencies = np.asarray(mask_meta_data.get("freqs"), dtype=float)
+    normalised = frequencies / fs
+
+    trials = data[:, channel_idx, :]
+    out = np.empty((trials.shape[0], 1, trials.shape[1], 2))
+    print(f"applying the wavelet filter to {trials.shape[1]} trials")
+
+    for i in range(trials.shape[1]):
+        x = trials[:, i] - np.mean(trials[:, i])
+        filtered = _sep_icwt(_sep_cwt(x, normalised) * mask, normalised)
+        out[:, 0, i, 0] = filtered
+        out[:, 0, i, 1] = trials[:, i]
+
+    meta_data = select_channels(meta_data, [channel_idx])
+    meta_data["index_labels"] = ["filtered", "original"]
+    return out, _refresh_shape(out, meta_data)
+
+
+# ---------------------------------------------------------------------------
+# RLW_findEKG and RLW_pan_tompkin
+# ---------------------------------------------------------------------------
+
+def _kmeans_1d(values, k=3, iterations=50, seed=0):
+    """Small 1-D k-means, standing in for MATLAB's kmeans."""
+    values = np.asarray(values, dtype=float).ravel()
+    rng = np.random.default_rng(seed)
+    centres = np.quantile(values, np.linspace(0.1, 0.9, k))
+    labels = np.zeros(values.size, dtype=int)
+    for _ in range(iterations):
+        new_labels = np.argmin(np.abs(values[:, None] - centres[None, :]), axis=1)
+        if np.array_equal(new_labels, labels):
+            break
+        labels = new_labels
+        for j in range(k):
+            if np.any(labels == j):
+                centres[j] = values[labels == j].mean()
+            else:
+                centres[j] = values[rng.integers(values.size)]
+    return labels
+
+
+def _cluster_f_value(values, labels):
+    """One-way ANOVA F for the clustering, the number findEKG ranks channels on."""
+    from scipy.stats import f_oneway
+
+    groups = [values[labels == j] for j in np.unique(labels)]
+    groups = [g for g in groups if g.size > 1]
+    if len(groups) < 2:
+        return 0.0
+    try:
+        return float(f_oneway(*groups).statistic)
+    except Exception:
+        return 0.0
+
+
+def find_ekg(npy_data, meta_data, event_code="EKG"):
+    """Find the heartbeat channel and mark every beat. Port of RLW_findEKG.
+
+    Bandpasses 0.5 to 40 Hz, then scores each channel by how cleanly its peak
+    heights split into three clusters: an ECG trace has a tall, regular R peak
+    and so scores high. The winning channel's R peaks become events.
+    """
+    from scipy.signal import butter, sosfiltfilt, find_peaks
+
+    data, _ = _as3d(np.asarray(npy_data, dtype=float))
+    meta_data = dict(meta_data)
+    fs = 1.0 / xstep(meta_data)
+
+    # Second-order sections, not a single transfer function: at order 10 the
+    # transfer-function form is numerically unstable and the output explodes.
+    sos = butter(10, [0.5 / (fs / 2), min(40.0, fs / 2 - 1) / (fs / 2)],
+                 btype="band", output="sos")
+    filtered = sosfiltfilt(sos, data, axis=0)
+
+    scores = np.zeros((data.shape[1], 2))
+    for channel in range(data.shape[1]):
+        trace = filtered[:, channel, 0]
+        for column, sign in enumerate((1, -1)):
+            peaks, _ = find_peaks(sign * trace)
+            if peaks.size < 10:
+                continue
+            heights = (sign * trace)[peaks]
+            scores[channel, column] = _cluster_f_value(heights, _kmeans_1d(heights))
+
+    best = np.unravel_index(np.argmax(scores), scores.shape)
+    channel, sign = best[0], (1 if best[1] == 0 else -1)
+    labels = channel_labels(meta_data)
+    name = labels[channel] if channel < len(labels) else str(channel)
+    print(f"channel {name} (ch{channel}) is selected to detect EKG")
+
+    trace = sign * filtered[:, channel, 0]
+    peaks, _ = find_peaks(trace)
+    if peaks.size < 3:
+        print("too few peaks to work with")
+        return data, meta_data
+
+    heights = trace[peaks]
+    clusters = _kmeans_1d(heights)
+    tallest = clusters[np.argmax(heights)]
+    peaks = peaks[clusters == tallest][1:-1]      # drop the edge beats
+
+    times = xvector(data, meta_data)
+    events = events_to_list(meta_data)
+    for peak in peaks:
+        events.append({"code": event_code, "latency": float(times[peak]), "epoch": 0})
+    print(f"found {len(peaks)} heartbeats")
+    return data, events_from_list(meta_data, events)
+
+
+def _pan_tompkin_detect(ecg, fs):
+    """The Pan-Tompkins QRS detector: bandpass, derivative, square, integrate.
+
+    Returns the sample positions of the R peaks. This is the algorithm the
+    MATLAB wrapper calls out to.
+    """
+    from scipy.signal import butter, sosfiltfilt, find_peaks
+
+    ecg = np.asarray(ecg, dtype=float)
+    nyquist = fs / 2
+
+    low, high = 5.0 / nyquist, min(15.0, nyquist - 1) / nyquist
+    sos = butter(3, [low, high], btype="band", output="sos")
+    filtered = sosfiltfilt(sos, ecg)
+
+    derivative = np.convolve(filtered, np.array([-1, -2, 0, 2, 1]) * fs / 8, mode="same")
+    squared = derivative ** 2
+
+    window = max(1, int(round(0.150 * fs)))          # 150 ms
+    integrated = np.convolve(squared, np.ones(window) / window, mode="same")
+
+    # adaptive threshold, with the refractory period a heart imposes
+    threshold = 0.5 * np.mean(integrated) + 0.5 * np.median(integrated)
+    peaks, _ = find_peaks(integrated, height=threshold,
+                          distance=max(1, int(round(0.200 * fs))))
+
+    # walk back from each integrated peak to the R peak in the filtered trace
+    half = window // 2
+    r_peaks = []
+    for peak in peaks:
+        lo, hi = max(0, peak - half), min(ecg.size, peak + half)
+        r_peaks.append(lo + int(np.argmax(np.abs(filtered[lo:hi]))))
+    return np.array(sorted(set(r_peaks)), dtype=int)
+
+
+def pan_tompkin(npy_data, meta_data, channel_label="EK1", event_code="QRS"):
+    """Detect QRS complexes and add a heart rate channel. Port of RLW_pan_tompkin.
+
+    Marks every QRS as an event and appends a channel, "HR", holding the
+    interval to the previous beat at each sample, so heart rate can be read off
+    alongside the EEG. Continuous data only, as in the original.
+    """
+    data, _ = _as3d(np.asarray(npy_data, dtype=float))
+    meta_data = dict(meta_data)
+
+    if data.shape[2] > 1:
+        raise ValueError("only continuous data is allowed")
+
+    channel_idx = find_channels(meta_data, [channel_label])[0]
+    fs = 1.0 / xstep(meta_data)
+
+    positions = _pan_tompkin_detect(data[:, channel_idx, 0], fs)
+    times = xvector(data, meta_data)
+    latencies = times[positions] if positions.size else np.array([])
+    print(f"found {len(latencies)} QRS complexes")
+
+    events = events_to_list(meta_data)
+    for latency in latencies:
+        events.append({"code": event_code, "latency": float(latency), "epoch": 0})
+    meta_data = events_from_list(meta_data, events)
+
+    intervals = np.zeros(data.shape[0])
+    if latencies.size > 1:
+        beat_intervals = np.diff(latencies, prepend=latencies[0])
+        nearest = np.argmin(np.abs(positions[None, :] -
+                                   np.arange(data.shape[0])[:, None]), axis=1)
+        intervals = beat_intervals[nearest]
+
+    out = np.concatenate([data, intervals[:, None, None]], axis=1)
+    meta_data = append_channel(meta_data, "HR")
+    return out, _refresh_shape(out, meta_data)
+
+
+# ---------------------------------------------------------------------------
+# Which MATLAB file each function came from.
+#
+# The functions Letswave has that this project already covers are not here:
+# RLW_butterworth_filter is bandpassfilter, RLW_FFT is frequencytransform,
+# RLW_ICA_compute is performICA, and so on through FPyVS_appylication. Nor are
+# the importers for formats this lab does not record, the dipole fitting, which
+# needs FieldTrip, or the statistics.
+# ---------------------------------------------------------------------------
+
+MATLAB_SOURCE = {
+    "RLW_CWT": "cwt",
+    "RLW_CWT_fast": "cwt_fast",
+    "RLW_FFT_filter": "fft_filter",
+    "RLW_ICA_remix": "ica_remix",
+    "RLW_ICA_unmix": "ica_unmix",
+    "RLW_PCA_compute": "pca_compute",
+    "RLW_SNR": "snr",
+    "RLW_STFFT": "stfft",
+    "RLW_STFFT_zhang": "stfft_zhang",
+    "RLW_arrange_index": "arrange_index",
+    "RLW_average_epochs_sliding": "average_epochs_sliding",
+    "RLW_average_erpimage": "average_erpimage",
+    "RLW_concatenate_epochs": "concatenate_epochs",
+    "RLW_crop": "crop",
+    "RLW_dc_removal": "dc_removal",
+    "RLW_derivate_signals": "derivate_signals",
+    "RLW_edit_electrodes_SEEG": "edit_electrodes_seeg",
+    "RLW_edit_electrodes_info": "edit_electrodes_info",
+    "RLW_equalize_epochs": "equalize_epochs",
+    "RLW_events_delete_duplicate": "events_delete_duplicate",
+    "RLW_events_level_trigger": "events_level_trigger",
+    "RLW_findEKG": "find_ekg",
+    "RLW_flip_electrodes": "flip_electrodes",
+    "RLW_grand_average": "grand_average",
+    "RLW_hilbert": "hilbert",
+    "RLW_hilbert_bands": "hilbert_bands",
+    "RLW_iFFT": "ifft",
+    "RLW_linear_CSD": "linear_csd",
+    "RLW_linear_channel_map": "linear_channel_map",
+    "RLW_math": "math",
+    "RLW_math_constant": "math_constant",
+    "RLW_merge_channels": "merge_channels",
+    "RLW_merge_index": "merge_index",
+    "RLW_ocular_remove": "ocular_remove",
+    "RLW_pan_tompkin": "pan_tompkin",
+    "RLW_pool_channels": "pool_channels",
+    "RLW_properties": "properties",
+    "RLW_rectify_signals": "rectify_signals",
+    "RLW_reject_epochs": "reject_epochs",
+    "RLW_reject_epochs_amplitude": "reject_epochs_amplitude",
+    "RLW_rereference_advanced": "rereference_advanced",
+    "RLW_resample": "resample",
+    "RLW_scalp_CSD": "scalp_csd",
+    "RLW_segmentation_SSEP": "segmentation_ssep",
+    "RLW_select_epochdata": "select_epochdata",
+    "RLW_select_events": "select_events",
+    "RLW_sort_epochdata": "sort_epochdata",
+    "RLW_sort_events": "sort_events",
+    "RLW_suppress_artifact": "suppress_artifact",
+    "RLW_suppress_artifact_event": "suppress_artifact_event",
+    "RLW_threshold": "threshold",
+    "RLW_wavelet_filter_apply": "wavelet_filter_apply",
+    "RLW_wavelet_filter_build": "wavelet_filter_build",
+    "RLW_weighted_channel_average_apply": "weighted_channel_average_apply",
+    "RLW_weighted_channel_average_template": "weighted_channel_average_template",
+}
