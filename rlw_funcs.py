@@ -8,14 +8,28 @@
 #                         axis 2 = epochs, when the data is epoched
 #     meta_data  dict, the header: fs, xstart, xstep, chanlocs, events, ...
 #
-# so every function here takes (npy_data, meta_data) and returns
-# (npy_data, meta_data), the same shape of call as bandpassfilter and the rest of
-# FPyVS_appylication. The unused y and z dimensions are dropped: they were only
-# ever 1 in this pipeline. varargin name/value pairs become keyword arguments.
+# The module has two layers. The one you call takes a filepath, the same way
+# bandpassfilter and the rest of FPyVS_appylication do:
+#
+#     npy_data, meta_data, filepath = rlw.snr(filepath, 9, operation="zscore")
+#
+# It loads the pair, runs the step, writes the result beside the input as
+# "<stepno>_<prefix> <name>" with a history entry, and hands back the data, the
+# metadata and where it went. Underneath, every function also exists with a
+# _data suffix and works on arrays already in memory:
+#
+#     npy_data, meta_data = rlw.snr_data(npy_data, meta_data, operation="zscore")
+#
+# The unused y and z dimensions are dropped: they were only ever 1 in this
+# pipeline. varargin name/value pairs become keyword arguments.
 #
 # Each function names the MATLAB file it came from. MATLAB counts from 1 and
 # python from 0, so anything that took an index in the original takes a 0-based
 # index here, and that is called out where it matters.
+
+import functools
+import pickle
+from pathlib import Path
 
 import numpy as np
 from scipy.signal import detrend as _detrend, fftconvolve
@@ -76,7 +90,7 @@ def _restore(data, ndim):
 # RLW_crop
 # ---------------------------------------------------------------------------
 
-def crop(npy_data, meta_data, x_start=None, x_size=None):
+def crop_data(npy_data, meta_data, x_start=None, x_size=None):
     """Keep a slice of the x axis. Port of RLW_crop.
 
     x_start is given in x-axis units (seconds, or Hz for a spectrum), not in
@@ -108,7 +122,7 @@ def crop(npy_data, meta_data, x_start=None, x_size=None):
 # RLW_dc_removal
 # ---------------------------------------------------------------------------
 
-def dc_removal(npy_data, meta_data, linear_detrend=False):
+def dc_removal_data(npy_data, meta_data, linear_detrend=False):
     """Subtract each signal's own mean. Port of RLW_dc_removal.
 
     With linear_detrend the straight line through the signal is removed too,
@@ -139,7 +153,7 @@ _CONSTANT_OPS = {
 }
 
 
-def math_constant(npy_data, meta_data, operation="add", constant=0):
+def math_constant_data(npy_data, meta_data, operation="add", constant=0):
     """Apply one constant to every sample. Port of RLW_math_constant.
 
     operation is add, subtract, multiply or divide.
@@ -168,7 +182,7 @@ _MATH_OPS = {
 }
 
 
-def math(npy_data_a, meta_data_a, npy_data_b, meta_data_b, operation="A+B",
+def math_data(npy_data_a, meta_data_a, npy_data_b, meta_data_b, operation="A+B",
          selected_epoch=None, selected_channel=None):
     """Combine two datasets sample by sample. Port of RLW_math.
 
@@ -210,7 +224,7 @@ def math(npy_data_a, meta_data_a, npy_data_b, meta_data_b, operation="A+B",
 # RLW_rectify_signals
 # ---------------------------------------------------------------------------
 
-def rectify_signals(npy_data, meta_data, operation="rectify"):
+def rectify_signals_data(npy_data, meta_data, operation="rectify"):
     """Absolute value or square of every sample. Port of RLW_rectify_signals."""
     data = np.asarray(npy_data, dtype=float)
     if str(operation).lower() == "rectify":
@@ -227,7 +241,7 @@ def rectify_signals(npy_data, meta_data, operation="rectify"):
 # RLW_derivate_signals
 # ---------------------------------------------------------------------------
 
-def derivate_signals(npy_data, meta_data):
+def derivate_signals_data(npy_data, meta_data):
     """First difference along x. Port of RLW_derivate_signals.
 
     The first sample is left as it was, the way the MATLAB loop starts at 2.
@@ -253,7 +267,7 @@ _THRESHOLD_OPS = {
 }
 
 
-def threshold(npy_data, meta_data, threshold_value=0, threshold_criterion="<",
+def threshold_data(npy_data, meta_data, threshold_value=0, threshold_criterion="<",
               consecutivity_criterion=1):
     """Mark the samples that pass a threshold. Port of RLW_threshold.
 
@@ -290,7 +304,7 @@ def threshold(npy_data, meta_data, threshold_value=0, threshold_criterion="<",
 # RLW_SNR
 # ---------------------------------------------------------------------------
 
-def snr(npy_data, meta_data, operation="subtract", xstart_bins=2, xend_bins=5,
+def snr_data(npy_data, meta_data, operation="subtract", xstart_bins=2, xend_bins=5,
         num_extreme=0):
     """Compare each bin against its neighbours. Port of RLW_SNR.
 
@@ -352,7 +366,7 @@ def snr(npy_data, meta_data, operation="subtract", xstart_bins=2, xend_bins=5,
 # RLW_iFFT
 # ---------------------------------------------------------------------------
 
-def ifft(npy_data, meta_data, time_meta_data=None, force_real=True):
+def ifft_data(npy_data, meta_data, time_meta_data=None, force_real=True):
     """Inverse FFT back to the time domain. Port of RLW_iFFT.
 
     Expects the full complex spectrum, the thing fft(..., half_spectrum=False,
@@ -427,7 +441,7 @@ def build_fft_bandpass(n_bins, bin_width, low_cutoff, high_cutoff,
     return v
 
 
-def fft_filter(npy_data, meta_data, filter_type="bandpass", low_cutoff=0.5,
+def fft_filter_data(npy_data, meta_data, filter_type="bandpass", low_cutoff=0.5,
                high_cutoff=30, low_width=0.25, high_width=1.0):
     """Filter in the frequency domain. Port of RLW_FFT_filter.
 
@@ -467,7 +481,7 @@ def fft_filter(npy_data, meta_data, filter_type="bandpass", low_cutoff=0.5,
 # RLW_resample
 # ---------------------------------------------------------------------------
 
-def resample(npy_data, meta_data, x_sampling_rate=None, interpolation_method="spline"):
+def resample_data(npy_data, meta_data, x_sampling_rate=None, interpolation_method="spline"):
     """Interpolate onto a new sampling rate. Port of RLW_resample (x axis only).
 
     Unlike downsampling, which throws samples away, this interpolates, so the
@@ -530,7 +544,7 @@ def _dft_at(block, frequencies, fs):
     return np.tensordot(block, kernel, axes=([0], [0]))   # -> (..., freq)
 
 
-def stfft(npy_data, meta_data, hanning_width=0.25, sliding_step=1,
+def stfft_data(npy_data, meta_data, hanning_width=0.25, sliding_step=1,
           low_frequency=1, high_frequency=30, num_frequency_lines=100,
           postprocess="amplitude", average_epochs=True):
     """Short-time FFT. Port of RLW_STFFT.
@@ -609,7 +623,7 @@ def _average_tf_epochs(out, postprocess):
     return np.mean(out, axis=-1, keepdims=True)
 
 
-def stfft_zhang(npy_data, meta_data, hanning_width=0.25, low_frequency=1,
+def stfft_zhang_data(npy_data, meta_data, hanning_width=0.25, low_frequency=1,
                 high_frequency=30, num_frequency_lines=100,
                 postprocess="amplitude", average_epochs=True):
     """Short-time FFT, Zhang's variant. Port of RLW_STFFT_zhang with sub_tfa_stft.
@@ -684,7 +698,7 @@ def _morlet(n_points, scale, central_frequency=MORLET_CENTRAL_FREQUENCY):
             np.exp(-t ** 2 / 2) / np.sqrt(scale))
 
 
-def cwt(npy_data, meta_data, low_frequency=1, high_frequency=30,
+def cwt_data(npy_data, meta_data, low_frequency=1, high_frequency=30,
         num_frequency_lines=100, output="amplitude", average_epochs=True,
         central_frequency=MORLET_CENTRAL_FREQUENCY):
     """Continuous wavelet transform. Port of RLW_CWT.
@@ -733,7 +747,7 @@ def cwt(npy_data, meta_data, low_frequency=1, high_frequency=30,
     return out, _refresh_shape(out, meta_data)
 
 
-def cwt_fast(npy_data, meta_data, low_frequency=1, high_frequency=30,
+def cwt_fast_data(npy_data, meta_data, low_frequency=1, high_frequency=30,
              num_frequency_lines=100, mother_name="morlet", mother_frequency=5,
              mother_spread=0.15, mother_size=8000, output="amplitude",
              average_epochs=True):
@@ -801,7 +815,7 @@ def cwt_fast(npy_data, meta_data, low_frequency=1, high_frequency=30,
 # RLW_hilbert and RLW_hilbert_bands
 # ---------------------------------------------------------------------------
 
-def hilbert(npy_data, meta_data):
+def hilbert_data(npy_data, meta_data):
     """Envelope of the signal. Port of RLW_hilbert.
 
     The absolute value of the analytic signal, which is the instantaneous
@@ -815,7 +829,7 @@ def hilbert(npy_data, meta_data):
     return out, _refresh_shape(out, dict(meta_data))
 
 
-def hilbert_bands(npy_data, meta_data, freq_start=50, freq_end=300,
+def hilbert_bands_data(npy_data, meta_data, freq_start=50, freq_end=300,
                   freq_lines=100, freq_width=5, freq_transition_width=1):
     """Envelope in each of many narrow bands. Port of RLW_hilbert_bands.
 
@@ -930,7 +944,7 @@ def _remap_epochs(meta_data, kept_epochs):
 # is 3-D and these two functions work on a fourth axis when one exists.
 # ---------------------------------------------------------------------------
 
-def arrange_index(npy_data, meta_data, index_idx):
+def arrange_index_data(npy_data, meta_data, index_idx):
     """Keep, reorder or drop indexes. Port of RLW_arrange_index.
 
     index_idx is 0-based. With 3-D data there is no index axis and nothing
@@ -951,7 +965,7 @@ def arrange_index(npy_data, meta_data, index_idx):
     return out, _refresh_shape(out, meta_data)
 
 
-def merge_index(datasets):
+def merge_index_data(datasets):
     """Stack several datasets along the index axis. Port of RLW_merge_index.
 
     datasets is a list of (npy_data, meta_data) pairs, all the same shape. The
@@ -1004,7 +1018,7 @@ def merge_index(datasets):
 # RLW_concatenate_epochs
 # ---------------------------------------------------------------------------
 
-def concatenate_epochs(npy_data, meta_data, epoch_idx=None):
+def concatenate_epochs_data(npy_data, meta_data, epoch_idx=None):
     """Lay the chosen epochs end to end into one long epoch.
 
     Port of RLW_concatenate_epochs. epoch_idx is 0-based; leave it out to take
@@ -1041,7 +1055,7 @@ def concatenate_epochs(npy_data, meta_data, epoch_idx=None):
 # RLW_equalize_epochs
 # ---------------------------------------------------------------------------
 
-def equalize_epochs(datasets, num_epochs=None, random_selection=False, seed=None):
+def equalize_epochs_data(datasets, num_epochs=None, random_selection=False, seed=None):
     """Cut every dataset down to the same number of epochs.
 
     Port of RLW_equalize_epochs. datasets is a list of (npy_data, meta_data)
@@ -1077,7 +1091,7 @@ def equalize_epochs(datasets, num_epochs=None, random_selection=False, seed=None
 # RLW_reject_epochs and RLW_reject_epochs_amplitude
 # ---------------------------------------------------------------------------
 
-def reject_epochs(npy_data, meta_data, rejected_epochs):
+def reject_epochs_data(npy_data, meta_data, rejected_epochs):
     """Throw away the named epochs. Port of RLW_reject_epochs.
 
     rejected_epochs is 0-based. Events belonging to a rejected epoch go with it.
@@ -1096,7 +1110,7 @@ def reject_epochs(npy_data, meta_data, rejected_epochs):
     return out, _refresh_shape(out, meta_data)
 
 
-def reject_epochs_amplitude(npy_data, meta_data, criterion=100, x_limits=False,
+def reject_epochs_amplitude_data(npy_data, meta_data, criterion=100, x_limits=False,
                             x_start=None, x_end=None, selected_channel_labels=None):
     """Throw away the epochs that swing too far. Port of RLW_reject_epochs_amplitude.
 
@@ -1170,7 +1184,7 @@ def _epochdata_values(meta_data, fieldname, n_epochs):
     return values
 
 
-def select_epochdata(npy_data, meta_data, fieldname, logical="==", comparison_value=0):
+def select_epochdata_data(npy_data, meta_data, fieldname, logical="==", comparison_value=0):
     """Keep the epochs whose epochdata field passes a test.
 
     Port of RLW_select_epochdata. logical is ==, ~=, >, <, >= or <=. Epochs
@@ -1196,7 +1210,7 @@ def select_epochdata(npy_data, meta_data, fieldname, logical="==", comparison_va
     return out, _refresh_shape(out, meta_data)
 
 
-def sort_epochdata(npy_data, meta_data, fieldname, sort_direction="ascend",
+def sort_epochdata_data(npy_data, meta_data, fieldname, sort_direction="ascend",
                    discard_empty=True):
     """Reorder the epochs by an epochdata field. Port of RLW_sort_epochdata.
 
@@ -1231,7 +1245,7 @@ def sort_epochdata(npy_data, meta_data, fieldname, sort_direction="ascend",
 # RLW_select_events and RLW_sort_events
 # ---------------------------------------------------------------------------
 
-def select_events(npy_data, meta_data, event_code, minimum_latency=0.0,
+def select_events_data(npy_data, meta_data, event_code, minimum_latency=0.0,
                   maximum_latency=1.0, check_minimum_latency=True,
                   check_maximum_latency=True):
     """Keep the epochs that carry a given event. Port of RLW_select_events.
@@ -1274,7 +1288,7 @@ def select_events(npy_data, meta_data, event_code, minimum_latency=0.0,
     return out, _refresh_shape(out, meta_data)
 
 
-def sort_events(npy_data, meta_data, event_code, sort_direction="ascend",
+def sort_events_data(npy_data, meta_data, event_code, sort_direction="ascend",
                 discard_empty=True):
     """Reorder the epochs by when an event happened. Port of RLW_sort_events.
 
@@ -1316,7 +1330,7 @@ def sort_events(npy_data, meta_data, event_code, sort_direction="ascend",
 # RLW_events_delete_duplicate
 # ---------------------------------------------------------------------------
 
-def events_delete_duplicate(meta_data, exact_latencies=True, tolerance=0.1,
+def events_delete_duplicate_data(meta_data, exact_latencies=True, tolerance=0.1,
                             verbose=False):
     """Drop repeated triggers. Port of RLW_events_delete_duplicate.
 
@@ -1358,7 +1372,7 @@ def events_delete_duplicate(meta_data, exact_latencies=True, tolerance=0.1,
 # RLW_events_level_trigger
 # ---------------------------------------------------------------------------
 
-def events_level_trigger(npy_data, meta_data, selected_channel, threshold=1000,
+def events_level_trigger_data(npy_data, meta_data, selected_channel, threshold=1000,
                          min_isi=1.0, direction="ascending", event_code="trig"):
     """Read triggers off a channel that crosses a level.
 
@@ -1426,7 +1440,7 @@ _SLIDING_OPS = {
 }
 
 
-def average_epochs_sliding(npy_data, meta_data, operation="average", width=0.2):
+def average_epochs_sliding_data(npy_data, meta_data, operation="average", width=0.2):
     """Slide a window along x and reduce it. Port of RLW_average_epochs_sliding.
 
     width is in x-axis units. operation is average, stdev, max, min, perc25,
@@ -1459,7 +1473,7 @@ def average_epochs_sliding(npy_data, meta_data, operation="average", width=0.2):
 # RLW_average_erpimage
 # ---------------------------------------------------------------------------
 
-def average_erpimage(npy_data, meta_data, num_lines=100, x_start=None,
+def average_erpimage_data(npy_data, meta_data, num_lines=100, x_start=None,
                      x_end=None, smooth=True, smooth_width=5):
     """Stack the epochs into an image. Port of RLW_average_erpimage.
 
@@ -1528,7 +1542,7 @@ def average_erpimage(npy_data, meta_data, num_lines=100, x_start=None,
 # RLW_grand_average
 # ---------------------------------------------------------------------------
 
-def grand_average(datasets, dataset_weights=None):
+def grand_average_data(datasets, dataset_weights=None):
     """Weighted average across datasets. Port of RLW_grand_average.
 
     datasets is a list of (npy_data, meta_data) pairs. A dataset with several
@@ -1566,7 +1580,7 @@ def grand_average(datasets, dataset_weights=None):
 # RLW_properties
 # ---------------------------------------------------------------------------
 
-def properties(meta_data, filetype=None, xstart=None, xstep=None,
+def properties_data(meta_data, filetype=None, xstart=None, xstep=None,
                ystart=None, ystep=None):
     """Edit the axis and filetype fields by hand. Port of RLW_properties.
 
@@ -1658,7 +1672,7 @@ def _chanlocs_from_labels(labels):
 # RLW_merge_channels
 # ---------------------------------------------------------------------------
 
-def merge_channels(datasets):
+def merge_channels_data(datasets):
     """Put the channels of several datasets side by side. Port of RLW_merge_channels.
 
     datasets is a list of (npy_data, meta_data) pairs that agree on everything
@@ -1699,7 +1713,7 @@ def merge_channels(datasets):
 # RLW_pool_channels
 # ---------------------------------------------------------------------------
 
-def pool_channels(npy_data, meta_data, channel_labels_wanted, channel_weights=None,
+def pool_channels_data(npy_data, meta_data, channel_labels_wanted, channel_weights=None,
                   mixed_channel_label="newchan", keep_original_channels=True):
     """Average several channels into a new one. Port of RLW_pool_channels.
 
@@ -1735,7 +1749,7 @@ def pool_channels(npy_data, meta_data, channel_labels_wanted, channel_weights=No
 # RLW_flip_electrodes
 # ---------------------------------------------------------------------------
 
-def flip_electrodes(npy_data, meta_data, chan_label_pairs):
+def flip_electrodes_data(npy_data, meta_data, chan_label_pairs):
     """Swap the signals of paired electrodes. Port of RLW_flip_electrodes.
 
     chan_label_pairs is a list of two-element pairs, for example
@@ -1763,7 +1777,7 @@ def flip_electrodes(npy_data, meta_data, chan_label_pairs):
 # RLW_edit_electrodes_info
 # ---------------------------------------------------------------------------
 
-def edit_electrodes_info(meta_data, chanlocs):
+def edit_electrodes_info_data(meta_data, chanlocs):
     """Overwrite the details of named channels. Port of RLW_edit_electrodes_info.
 
     chanlocs is a list of dicts, each with a "labels" key naming the channel it
@@ -1801,7 +1815,7 @@ def edit_electrodes_info(meta_data, chanlocs):
 # RLW_rereference_advanced
 # ---------------------------------------------------------------------------
 
-def rereference_advanced(npy_data, meta_data, active_channel_labels,
+def rereference_advanced_data(npy_data, meta_data, active_channel_labels,
                          reference_channel_labels):
     """Build a custom montage. Port of RLW_rereference_advanced.
 
@@ -1831,7 +1845,7 @@ def rereference_advanced(npy_data, meta_data, active_channel_labels,
 # RLW_linear_channel_map
 # ---------------------------------------------------------------------------
 
-def linear_channel_map(npy_data, meta_data, num_lines=100):
+def linear_channel_map_data(npy_data, meta_data, num_lines=100):
     """Interpolate across channels into an image. Port of RLW_linear_channel_map.
 
     Treats the channel order as a line through the head and interpolates it onto
@@ -1866,7 +1880,7 @@ def linear_channel_map(npy_data, meta_data, num_lines=100):
 # RLW_weighted_channel_average_template and _apply
 # ---------------------------------------------------------------------------
 
-def weighted_channel_average_template(npy_data, meta_data, x, num_channels=6,
+def weighted_channel_average_template_data(npy_data, meta_data, x, num_channels=6,
                                       selected_channels=None, epoch=0,
                                       peakdir="max", normalize=True):
     """Pick the channels that carry a peak, and how much each contributes.
@@ -1907,7 +1921,7 @@ def weighted_channel_average_template(npy_data, meta_data, x, num_channels=6,
     return weights, template_labels
 
 
-def weighted_channel_average_apply(npy_data, meta_data, template_weights,
+def weighted_channel_average_apply_data(npy_data, meta_data, template_weights,
                                    template_labels):
     """Collapse the channels using a template. Port of RLW_weighted_channel_average_apply.
 
@@ -1939,7 +1953,7 @@ def weighted_channel_average_apply(npy_data, meta_data, template_weights,
 # mne ICA object, and these are for working with the matrices directly.
 # ---------------------------------------------------------------------------
 
-def ica_unmix(npy_data, meta_data, ica_um):
+def ica_unmix_data(npy_data, meta_data, ica_um):
     """Turn channels into components. Port of RLW_ICA_unmix.
 
     ica_um is the unmixing matrix, one row per component. Returns the component
@@ -1960,7 +1974,7 @@ def ica_unmix(npy_data, meta_data, ica_um):
     return out, _refresh_shape(out, meta_data), original_chanlocs
 
 
-def ica_remix(npy_data, meta_data, ica_mm, ic_list=None, old_chanlocs=None):
+def ica_remix_data(npy_data, meta_data, ica_mm, ic_list=None, old_chanlocs=None):
     """Turn components back into channels. Port of RLW_ICA_remix.
 
     ica_mm is the mixing matrix. ic_list names the components to keep (0-based);
@@ -1994,7 +2008,7 @@ def ica_remix(npy_data, meta_data, ica_mm, ic_list=None, old_chanlocs=None):
     return out, _refresh_shape(out, meta_data)
 
 
-def pca_compute(npy_data, meta_data=None):
+def pca_compute_data(npy_data, meta_data=None):
     """Principal components of the channel covariance. Port of RLW_PCA_compute.
 
     Returns {"ica_mm": mixing, "ica_um": unmixing}, the same pair of matrices
@@ -2019,7 +2033,7 @@ def pca_compute(npy_data, meta_data=None):
 # RLW_ocular_remove
 # ---------------------------------------------------------------------------
 
-def ocular_remove(npy_data, meta_data, eog_channels):
+def ocular_remove_data(npy_data, meta_data, eog_channels):
     """Regress the eye channels out of every channel. Port of RLW_ocular_remove.
 
     For each channel a least squares fit against the EOG channels and a constant
@@ -2054,7 +2068,7 @@ def ocular_remove(npy_data, meta_data, eog_channels):
 # RLW_suppress_artifact and RLW_suppress_artifact_event
 # ---------------------------------------------------------------------------
 
-def suppress_artifact(npy_data, meta_data, x_start=-0.005, x_end=0.005):
+def suppress_artifact_data(npy_data, meta_data, x_start=-0.005, x_end=0.005):
     """Draw a straight line across a window. Port of RLW_suppress_artifact.
 
     Replaces everything between x_start and x_end with a line joining the two
@@ -2078,7 +2092,7 @@ def suppress_artifact(npy_data, meta_data, x_start=-0.005, x_end=0.005):
     return out, _refresh_shape(out, meta_data)
 
 
-def suppress_artifact_event(npy_data, meta_data, event_code, x_start=-0.005,
+def suppress_artifact_event_data(npy_data, meta_data, event_code, x_start=-0.005,
                             x_end=0.005, interp_method="spline"):
     """Interpolate over the artifact around each event.
 
@@ -2126,7 +2140,7 @@ def suppress_artifact_event(npy_data, meta_data, event_code, x_start=-0.005,
 # RLW_segmentation_SSEP
 # ---------------------------------------------------------------------------
 
-def segmentation_ssep(npy_data, meta_data, event_labels, cycle_skip=0,
+def segmentation_ssep_data(npy_data, meta_data, event_labels, cycle_skip=0,
                       cycle_total=1, cycle_frequency=1.0):
     """Cut epochs that hold a whole number of stimulation cycles.
 
@@ -2189,7 +2203,7 @@ def segmentation_ssep(npy_data, meta_data, event_labels, cycle_skip=0,
 # RLW_edit_electrodes_SEEG
 # ---------------------------------------------------------------------------
 
-def edit_electrodes_seeg(meta_data, list_labels, list_x, list_y, list_z):
+def edit_electrodes_seeg_data(meta_data, list_labels, list_x, list_y, list_z):
     """Give named electrodes SEEG coordinates. Port of RLW_edit_electrodes_SEEG.
 
     Sets X, Y and Z for each named channel and marks it as SEEG rather than
@@ -2204,14 +2218,14 @@ def edit_electrodes_seeg(meta_data, list_labels, list_x, list_y, list_z):
         print(f"setting SEEG electrode coordinate: {label}")
         records.append({"labels": label, "X": float(x), "Y": float(y),
                         "Z": float(z), "SEEG_enabled": 1, "topo_enabled": 0})
-    return edit_electrodes_info(meta_data, records)
+    return edit_electrodes_info_data(meta_data, records)
 
 
 # ---------------------------------------------------------------------------
 # RLW_linear_CSD
 # ---------------------------------------------------------------------------
 
-def linear_csd(npy_data, meta_data):
+def linear_csd_data(npy_data, meta_data):
     """Second spatial derivative along the channel order. Port of RLW_linear_CSD.
 
     Each channel becomes 2*itself minus its two neighbours, so a signal shared
@@ -2250,7 +2264,7 @@ def _legendre_gh(cosines, m=4, n_terms=50):
     return g / (4 * np.pi), h / (4 * np.pi)
 
 
-def scalp_csd(npy_data, meta_data, m=4, smoothing=1e-5, n_terms=50):
+def scalp_csd_data(npy_data, meta_data, m=4, smoothing=1e-5, n_terms=50):
     """Current source density over the scalp. Port of RLW_scalp_CSD.
 
     The MATLAB reaches into the CSD toolbox for its G and H matrices; these are
@@ -2362,7 +2376,7 @@ def _sep_icwt(transform, normalised_frequencies):
     return np.real(total / c_phi)
 
 
-def wavelet_filter_build(npy_data, meta_data, selected_channel,
+def wavelet_filter_build_data(npy_data, meta_data, selected_channel,
                          start_frequency=1, end_frequency=40, frequency_step=1,
                          threshold=0.85):
     """Learn which parts of the time-frequency plane hold the response.
@@ -2411,7 +2425,7 @@ def wavelet_filter_build(npy_data, meta_data, selected_channel,
     return mask, _refresh_shape(mask, meta_data)
 
 
-def wavelet_filter_apply(npy_data, meta_data, mask, mask_meta_data, channel_name):
+def wavelet_filter_apply_data(npy_data, meta_data, mask, mask_meta_data, channel_name):
     """Keep only the part of each trial the mask covers.
 
     Port of RLW_wavelet_filter_apply with tf_filtering. Transforms each trial,
@@ -2479,7 +2493,7 @@ def _cluster_f_value(values, labels):
         return 0.0
 
 
-def find_ekg(npy_data, meta_data, event_code="EKG"):
+def find_ekg_data(npy_data, meta_data, event_code="EKG"):
     """Find the heartbeat channel and mark every beat. Port of RLW_findEKG.
 
     Bandpasses 0.5 to 40 Hz, then scores each channel by how cleanly its peak
@@ -2568,7 +2582,7 @@ def _pan_tompkin_detect(ecg, fs):
     return np.array(sorted(set(r_peaks)), dtype=int)
 
 
-def pan_tompkin(npy_data, meta_data, channel_label="EK1", event_code="QRS"):
+def pan_tompkin_data(npy_data, meta_data, channel_label="EK1", event_code="QRS"):
     """Detect QRS complexes and add a heart rate channel. Port of RLW_pan_tompkin.
 
     Marks every QRS as an event and appends a channel, "HR", holding the
@@ -2604,6 +2618,204 @@ def pan_tompkin(npy_data, meta_data, channel_label="EK1", event_code="QRS"):
     out = np.concatenate([data, intervals[:, None, None]], axis=1)
     meta_data = append_channel(meta_data, "HR")
     return out, _refresh_shape(out, meta_data)
+
+
+# ---------------------------------------------------------------------------
+# The file-level API
+#
+# Everything above works on arrays. These wrappers are what you actually call:
+# they take the full path of a dataset, load the .npy/.pkl pair, run the
+# function, write the result beside it under a new name and return
+#
+#     npy_data, meta_data, filepath
+#
+# the same three things bandpassfilter and every other step in
+# FPyVS_appylication returns, with the same "<stepno>_<prefix> " naming and the
+# same history entry. The array versions keep their old names with a _data
+# suffix, for when you already have the data in hand.
+#
+#     npy_data, meta_data, filepath = rlw.snr(filepath, 9, operation="zscore")
+#     npy_data, meta_data = rlw.snr_data(npy_data, meta_data, operation="zscore")
+# ---------------------------------------------------------------------------
+
+def loadalldata(filepath):
+    """Read the .npy/.pkl pair for a path. Same contract as the one in FPyVS_appylication."""
+    filepath = Path(filepath)
+    metafilepath = filepath.with_suffix(".pkl")
+    npyfilepath = filepath.with_suffix(".npy")
+    with open(metafilepath, "rb") as handle:
+        meta_data = pickle.load(handle)
+    return np.load(npyfilepath, allow_pickle=True), meta_data, npyfilepath, metafilepath
+
+
+def savealldata(npy_data, meta_data, filepath):
+    """Write the .npy/.pkl pair for a path."""
+    filepath = Path(filepath)
+    with open(filepath.with_suffix(".pkl"), "wb") as handle:
+        pickle.dump(meta_data, handle)
+    np.save(filepath.with_suffix(".npy"), npy_data)
+
+
+def _update_history(meta_data, extn_str):
+    """Add the step to the history, through cust_funcs when it is importable."""
+    try:
+        import cust_funcs as cf
+        return cf.updatemetadataHistory(meta_data, extn_str)
+    except Exception:
+        history = dict(meta_data.get("history") or {})
+        history[extn_str] = " ".join(list(history) + [extn_str])
+        meta_data["history"] = history
+        return meta_data
+
+
+def _output_path(filepath, stepno, prefix):
+    """"<stepno>_<prefix> " in front of the name, as the other steps do."""
+    filepath = Path(filepath)
+    extn_str = f"{stepno}_{prefix} "
+    return filepath.with_name(extn_str + filepath.stem), extn_str
+
+
+def _finish(npy_data, meta_data, filepath, stepno, prefix):
+    """Tag the history, save beside the input and report where it went."""
+    out_path, extn_str = _output_path(filepath, stepno, prefix)
+    meta_data = _update_history(meta_data, extn_str)
+    savealldata(npy_data, meta_data, out_path)
+    print(f"data saved as {out_path}")
+    print()
+    return npy_data, meta_data, out_path
+
+
+def _wrap(func, prefix, kind="data"):
+    """Build the filepath-taking version of one array function."""
+
+    @functools.wraps(func)
+    def step(filepath, stepno, *args, **kwargs):
+        if kind == "multi":
+            # a list of paths in, one dataset out
+            filepaths = [Path(f) for f in np.atleast_1d(filepath)]
+            datasets = [loadalldata(f)[:2] for f in filepaths]
+            npy_data, meta_data = func(datasets, *args, **kwargs)
+            return _finish(npy_data, meta_data, filepaths[0], stepno, prefix)
+
+        if kind == "pair":
+            # this dataset and one other named by its own path
+            if "other_filepath" in kwargs:
+                other, rest = kwargs.pop("other_filepath"), args
+            else:
+                other, *rest = args
+            args = rest
+            npy_a, meta_a, *_ = loadalldata(filepath)
+            npy_b, meta_b, *_ = loadalldata(other)
+            npy_data, meta_data = func(npy_a, meta_a, npy_b, meta_b, *args, **kwargs)
+            return _finish(npy_data, meta_data, filepath, stepno, prefix)
+
+        if kind == "equalize":
+            # many in, many out: one saved file per input
+            filepaths = [Path(f) for f in np.atleast_1d(filepath)]
+            datasets = [loadalldata(f)[:2] for f in filepaths]
+            results = func(datasets, *args, **kwargs)
+            return [_finish(d, m, f, stepno, prefix)
+                    for (d, m), f in zip(results, filepaths)]
+
+        npy_data, meta_data, *_ = loadalldata(filepath)
+
+        if kind == "wavelet_apply":
+            if "mask_filepath" in kwargs:
+                mask_path, rest = kwargs.pop("mask_filepath"), args
+            else:
+                mask_path, *rest = args
+            mask, mask_meta, *_ = loadalldata(mask_path)
+            npy_data, meta_data = func(npy_data, meta_data, mask, mask_meta, *rest, **kwargs)
+        elif kind == "meta":
+            meta_data = func(meta_data, *args, **kwargs)
+        elif kind == "meta_from_data":
+            npy_data, meta_data = npy_data, func(npy_data, meta_data, *args, **kwargs)
+        elif kind == "unmix":
+            npy_data, meta_data, _extra = func(npy_data, meta_data, *args, **kwargs)
+        elif kind == "pca":
+            meta_data["pca"] = func(npy_data, meta_data, *args, **kwargs)
+        elif kind == "template":
+            weights, labels = func(npy_data, meta_data, *args, **kwargs)
+            meta_data["channel_template"] = {"weights": weights, "labels": labels}
+        else:
+            npy_data, meta_data = func(npy_data, meta_data, *args, **kwargs)
+
+        return _finish(npy_data, meta_data, filepath, stepno, prefix)
+
+    step.__name__ = func.__name__[:-len("_data")]
+    step.__qualname__ = step.__name__
+    step.__doc__ = (
+        f"{(func.__doc__ or '').strip()}\n\n"
+        f"    Takes the full path of a dataset and returns\n"
+        f"    (npy_data, meta_data, filepath). The output is written beside the\n"
+        f'    input as "<stepno>_{prefix} <name>". The array version is '
+        f"{func.__name__}.\n    "
+    )
+    return step
+
+
+# function -> the prefix its output file gets, and how its arguments are shaped
+FILE_STEPS = {
+    "arrange_index": ("index", "data"),
+    "average_epochs_sliding": ("slide", "data"),
+    "average_erpimage": ("erpimage", "data"),
+    "concatenate_epochs": ("cat", "data"),
+    "crop": ("crop", "data"),
+    "cwt": ("cwt", "data"),
+    "cwt_fast": ("cwtfast", "data"),
+    "dc_removal": ("dc", "data"),
+    "derivate_signals": ("deriv", "data"),
+    "edit_electrodes_info": ("chaninfo", "meta"),
+    "edit_electrodes_seeg": ("seeg", "meta"),
+    "equalize_epochs": ("equal", "equalize"),
+    "events_delete_duplicate": ("nodup", "meta"),
+    "events_level_trigger": ("trig", "meta_from_data"),
+    "fft_filter": ("fftfilt", "data"),
+    "find_ekg": ("ekg", "data"),
+    "flip_electrodes": ("flip", "data"),
+    "grand_average": ("grandavg", "multi"),
+    "hilbert": ("hilbert", "data"),
+    "hilbert_bands": ("hilbands", "data"),
+    "ica_remix": ("remix", "data"),
+    "ica_unmix": ("unmix", "unmix"),
+    "ifft": ("ifft", "data"),
+    "linear_channel_map": ("chanmap", "data"),
+    "linear_csd": ("lincsd", "data"),
+    "math": ("math", "pair"),
+    "math_constant": ("mathconst", "data"),
+    "merge_channels": ("mergechan", "multi"),
+    "merge_index": ("mergeindex", "multi"),
+    "ocular_remove": ("eogreg", "data"),
+    "pan_tompkin": ("qrs", "data"),
+    "pca_compute": ("pca", "pca"),
+    "pool_channels": ("pool", "data"),
+    "properties": ("props", "meta"),
+    "rectify_signals": ("rect", "data"),
+    "reject_epochs": ("reject", "data"),
+    "reject_epochs_amplitude": ("rejectamp", "data"),
+    "rereference_advanced": ("bipolar", "data"),
+    "resample": ("resample", "data"),
+    "scalp_csd": ("csd", "data"),
+    "segmentation_ssep": ("ssep", "data"),
+    "select_epochdata": ("selepoch", "data"),
+    "select_events": ("selevent", "data"),
+    "snr": ("snr", "data"),
+    "sort_epochdata": ("sortepoch", "data"),
+    "sort_events": ("sortevent", "data"),
+    "stfft": ("stfft", "data"),
+    "stfft_zhang": ("stfftz", "data"),
+    "suppress_artifact": ("supart", "data"),
+    "suppress_artifact_event": ("supartev", "data"),
+    "threshold": ("thresh", "data"),
+    "wavelet_filter_apply": ("wavfilt", "wavelet_apply"),
+    "wavelet_filter_build": ("wavmask", "data"),
+    "weighted_channel_average_apply": ("chanavg", "data"),
+    "weighted_channel_average_template": ("chantemplate", "template"),
+}
+
+for _name, (_prefix, _kind) in FILE_STEPS.items():
+    globals()[_name] = _wrap(globals()[f"{_name}_data"], _prefix, _kind)
+del _name, _prefix, _kind
 
 
 # ---------------------------------------------------------------------------
