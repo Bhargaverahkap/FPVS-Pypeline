@@ -80,7 +80,7 @@ def rebrand_lw6data(filepath):
         "zstep": np.squeeze(meta_data["header"]["zstep"]),
         "chanlocs": chanlocs,
         "events": events,
-        "fs": 2048,
+        "fs": round(1 / meta_data["header"]["xstep"][0][0].item()),  # xstep is the sampling interval
         "activation": "microvolts",
         "fields": fields
     }
@@ -112,6 +112,95 @@ def assign(data):
 
     # Leave clean data types (strings, ints, floats, paths) untouched
     return data
+
+def readLw6(filepath):
+    """ Load a Letswave6 .lw6 header as plain Python dicts, lists, strings and numbers.
+
+    scipy's simplify_cells turns MATLAB structs into dicts, struct arrays (history, chanlocs, events)
+    into lists of dicts and removes the 1x1 array wrappers, so the header can be browsed in the
+    VS Code variables pane or printed with pprint.
+
+    Header fields:
+        filetype: kind of data, e.g. 'time_amplitude' (time domain) or 'frequency_amplitude' (after FFT)
+        name: dataset name, Letswave puts the suffix of every processing step in front of it
+        tags: user tags, usually empty
+        history: list of processing steps, each with gui_info (function and suffix) and the parameters used
+        datasize: size of the data matrix as [epochs, channels, index, z, y, x], x is time (samples) or frequency (bins)
+        xstart, xstep: time (s) of the first sample and time between samples (1/fs), or Hz for frequency data
+        ystart, ystep, zstart, zstep: y and z axes, only used for time-frequency or 3D data
+        chanlocs: one dict per channel: labels, topo_enabled (1 = shown on topomaps), SEEG_enabled,
+            theta/radius (2D polar position used for topomaps), sph_theta/sph_phi (spherical, EEGLAB),
+            sph_theta_besa/sph_phi_besa (spherical, BESA), X/Y/Z (cartesian on a unit sphere)
+        events: one dict per trigger: code (trigger value as a string), latency (s, on the same axis as xstart),
+            epoch (1-based epoch the event belongs to)
+
+    :param filepath: enter the full filepath of the .lw6 file
+    :return: the header as a dict
+    """
+    import scipy.io as sci
+    header = sci.loadmat(filepath, simplify_cells=True)["header"]
+    # a struct array with one element is squeezed to a single dict, keep these as lists
+    for key in ("history", "chanlocs", "events"):
+        if isinstance(header[key], dict):
+            header[key] = [header[key]]
+    return header
+
+def lw6Tables(header):
+    """ Turn the list parts of a readLw6 header into pandas DataFrames, one row per channel / event / step.
+    In a notebook, VS Code opens DataFrames in its Data Viewer from the Jupyter variables pane.
+
+    :param header: header dict as returned by readLw6
+    :return: chanlocs, events and history DataFrames
+    """
+    import numpy as np
+    import pandas as pd
+
+    def orempty(v, fill):  # empty MATLAB arrays (e.g. EXG7 coordinates, the import step's suffix) become fill
+        return fill if np.size(v) == 0 else v
+
+    chanlocs = pd.DataFrame([{k: orempty(v, np.nan) for k, v in ch.items()} for ch in header["chanlocs"]])
+    events = pd.DataFrame(list(header["events"]), columns=["code", "latency", "epoch"])
+    history = pd.DataFrame([{
+        "step": step["configuration"]["gui_info"]["name"],
+        "function": step["configuration"]["gui_info"]["function_name"],
+        "suffix": orempty(step["configuration"]["gui_info"]["process_filename_string"], ""),
+        "parameters": step["configuration"]["parameters"],
+    } for step in header["history"]])
+    return chanlocs, events, history
+
+def exportLw6(filepath, outdir=None):
+    """ Save a .lw6 header as files that are easy to read in VS Code: the whole header as indented JSON
+    (foldable, with an outline) and chanlocs / events / history as CSV tables.
+
+    :param filepath: enter the full filepath of the .lw6 file
+    :param outdir: folder to write the files into, defaults to the folder of the .lw6 file
+    :return: list of the written filepaths
+    """
+    import json
+    import numpy as np
+    from pathlib import Path
+
+    filepath = Path(filepath)
+    outdir = filepath.parent if outdir is None else Path(outdir)
+    header = readLw6(filepath)
+
+    def tojson(obj):  # numpy arrays and scalars are not JSON serialisable by default
+        if isinstance(obj, np.ndarray):
+            return obj.tolist()
+        if isinstance(obj, np.generic):
+            return obj.item()
+        raise TypeError(f"{type(obj)} is not JSON serialisable")
+
+    jsonpath = outdir / f"{filepath.stem}_header.json"
+    with open(jsonpath, "w") as f:
+        json.dump(header, f, indent=2, default=tojson)
+    written = [jsonpath]
+
+    for name, table in zip(("chanlocs", "events", "history"), lw6Tables(header)):
+        csvpath = outdir / f"{filepath.stem}_{name}.csv"
+        table.to_csv(csvpath, index=False)
+        written.append(csvpath)
+    return written
 
 def loadMetadata(filepath):
     import pickle
