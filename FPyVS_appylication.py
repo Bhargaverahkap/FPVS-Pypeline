@@ -2,7 +2,7 @@
 # Add all steps/functionalities here as a function with no dependencies on FPVS_pycage
 
 import numpy as np
-from scipy.signal import butter, filtfilt, iirnotch
+from scipy.signal import butter, filtfilt, iirnotch,sosfiltfilt
 import mne
 from mne.preprocessing import ICA
 import importlib
@@ -101,7 +101,7 @@ def extractdatafrombdf(filepath,summarychid = None):
         "xstart": 0.0,
         "ystart": 0.0,
         "zstart": 0.0,
-        "xstep": 0.00048828125,
+        "xstep": 1/fs,
         "ystep": 1,
         "zstep": 1,
         "chanlocs": chanlocs,
@@ -137,6 +137,16 @@ def convertMATtoPY(filepath):
     
     return npy_data, meta_data, filepath
 
+<<<<<<< Updated upstream
+=======
+def ConvertMatToNpy(filepath): #A function made for diagnosti put
+    matfilepath = filepath.with_suffix('.mat')
+    with h5py.File(matfilepath,'r') as f:
+        mat_data = f['data'][:]
+    npy_data = np.squeeze(mat_data)
+    return npy_data
+    
+>>>>>>> Stashed changes
 def renamechannels(filepath,stepno, targets = None, replacements = None):
 
     if targets == None:
@@ -259,6 +269,7 @@ def downsampling(filepath, stepno, dsfact = None, showsummaryflag = True, summar
     old_fs = meta_data["fs"]
     new_fs = int(meta_data["fs"]) // dsfact
     meta_data["fs"] = new_fs
+    meta_data["samples saved"] = dsampind 
     filepath = filepath.with_name( extn_str + filepath.stem)
     savealldata(npy_data, meta_data, filepath)
     
@@ -304,6 +315,7 @@ def delete_channels(filepath,stepno,deletechnames = None):
 
     return npy_data, meta_data, filepath
 
+<<<<<<< Updated upstream
 def bandpassfilter(filepath,stepno,filterparameters = None, showsummaryflag = True, summarychid = None):
     
     extn_str = f"{stepno}_but "
@@ -311,72 +323,130 @@ def bandpassfilter(filepath,stepno,filterparameters = None, showsummaryflag = Tr
         filterparameters = [4, 0.1, 100] #order of the filter, lowpass and highpass 
 
     npy_data , meta_data, npyfilepath, metafilepath = loadalldata(filepath)
+=======
+def filter_signal(filepath,stepno, filter_type = 'bandpass' ,low_cut = .05, high_cut = 100, filter_order = 4):
+    """
+    Uses butterworth filtering to filter the signal
+
+    parameters:
+    -----------------------
+    filepath: the full filepath to the .npy/.pkl files
+    stepno: The step number at which this function is performed on the data to be used as an extension
+    filter_type: the type of filtering that you want to do. available settings are
+                1. Bandpass (default)
+                2. Highpass
+                3. Lowpass
+                4. notch
+    """
+    extn_str = f"{stepno}_but "   
+    npy_data , meta_data, npyfilepath, metafilepath = loadalldata(filepath)
+    filterparameters = [filter_order, low_cut, high_cut] #order of the filter, lowpass and highpass     
+>>>>>>> Stashed changes
     fs = meta_data["fs"]
     nch = npy_data.shape[1]
-
+    padding = 30*fs
+    new_npy_data = np.pad(npy_data, pad_width=((padding, padding), (0, 0)), mode='reflect')
+    
     # Design Butterworth bandpass filter
+<<<<<<< Updated upstream
     nyquist = 0.5 * fs
     low = filterparameters[1] / nyquist
     high = filterparameters[2] / nyquist
     b, a = butter(filterparameters[0], [low, high], btype='band')
     filt_data = np.zeros(npy_data.shape)
+=======
+    fnyquist = 0.5 * fs
+
+    print(low_cut,high_cut)
+    if filter_type == 'lowpass':
+        b, a = butter(filter_order, high_cut / fnyquist, 'low')
+    elif filter_type == 'highpass':
+        b, a = butter(filter_order, low_cut / fnyquist, 'high')
+    elif filter_type == 'bandpass':
+        if filter_order % 2:                      # letswave needs an even order
+            filter_order -= 1
+        b, a = butter(filter_order, [low_cut / fnyquist, high_cut / fnyquist], 'bandpass')
+    elif filter_type == 'notch':                  # letswave's IIR notch = Butterworth band-stop
+        b, a = butter(filter_order, [low_cut / fnyquist, high_cut / fnyquist], 'bandstop')
+    else:
+        raise ValueError(filter_type)
+>>>>>>> Stashed changes
 
     # Apply filter
-    for chid in range(0, nch, 1):
-        signal = npy_data[:, chid]
-        filt_data[:, chid] = filtfilt(b, a, signal)  # bandpass filtering
+    new_npy_data = filtfilt(b, a, new_npy_data, axis=0)  # bandpass filtering
 
-    meta_data["bandpass filter param"] = filterparameters
+    meta_data["bandpass filter param"] = {
+        "filter order": filter_order,
+        "low cutoff": low_cut, 
+        "high cutoff": high_cut}
     meta_data["fields"].update({"bandpass filter param": "filter order,low cutoff, high cutoff"})
 
-    npy_data = filt_data.copy()
-    del filt_data
-
+    npy_data = new_npy_data[padding:-padding,:]
+    print("the padded data looks like:", new_npy_data.shape, "and the unpadded data looks like:", npy_data.shape)
     meta_data = cf.updatemetadataHistory(meta_data,extn_str)
     filepath = filepath.with_name( extn_str + filepath.stem)
     savealldata(npy_data, meta_data, filepath)
 
-    print("data has been band pass filtered", [filterparameters[1], filterparameters[2]], "order: ", filterparameters[0])
+    print("data has been band pass filtered", [low_cut, high_cut], "order: ", filter_order)
     print("data saved as ", filepath)
     print("\n")
     return npy_data, meta_data, filepath
 
+<<<<<<< Updated upstream
 def notchfilter(filepath,stepno,notchparameters = None, showsummaryflag = True, summarychid = None):
     extn_str = f"{stepno}_notchfilt "
+=======
+def notchfilter(filepath,stepno,slope = 2, notch_freq = 50):
+>>>>>>> Stashed changes
     
-    if notchparameters == None:
-        notchparameters = [4,50,100]
-
+    extn_str = f"{stepno}_notchfilt "
     npy_data , meta_data, npyfilepath, metafilepath = loadalldata(filepath)
+    notchparameters = [notch_freq/slope, notch_freq]
+
+    if "bandpass filter param" in meta_data:
+        max_n = min((meta_data['fs']//2)//notch_freq , int(meta_data["bandpass filter param"][-1]/notch_freq))
+    else: 
+        max_n = 2
+        
+    freqs = [(n+1)*notch_freq for n in range(max_n )]
+    notchparameters = np.delete(notchparameters, -1)
+    notchparameters = np.concatenate((notchparameters,freqs))
+
+    print("notch parameters are:", notchparameters)
     fs = meta_data["fs"]
     nch = npy_data.shape[1]
     an = []
     bn = []
-    for numfreq in range((len(notchparameters)-1)):
+    for numfreq in range(len(notchparameters)-1):
         bn_coeff, an_coeff = iirnotch(notchparameters[numfreq+1],notchparameters[0],fs)
+        # print(an_coeff)
         an.append(an_coeff)
         bn.append(bn_coeff)
-        
+
+    print(np.shape(an))
+    print(an)
+    print("An is as follows",an)
     for chid in range(0, nch, 1):
         signal = npy_data[:, chid]
         for numfilter in range(len(an)):
             signal = filtfilt(bn[numfilter],an[numfilter], signal)
+            # print("an used is:", an[numfilter])
         npy_data[:, chid] = signal
 
     meta_data["notchfilter param"] = notchparameters
+    meta_data["an"] = an
     meta_data["fields"].update({"notchfilter param": "slope, frequencies to filter..."})
-
     cf.updatemetadataHistory(meta_data, extn_str)
     filepath = filepath.with_name( extn_str + filepath.stem)
-
     savealldata(npy_data, meta_data, filepath)
 
-    print("notch filtering done to filter out frequencies:", notchparameters[1:],"hz, slope of the filter is: ", notchparameters[0])
+    print("notch filtering done to filter out frequencies:", notchparameters[1:],"hz, slope of the filter is: ", slope)
     print("data saved as: ", filepath)
     print("\n")
 
     return npy_data, meta_data, filepath
 
+<<<<<<< Updated upstream
 def performICA(filepath, ch_name = None):
 
     if ch_name == None:
@@ -461,30 +531,50 @@ def applyICA(filepath, ica, raw, rmidx):
 
 def segmentation(filepath, stepno, startcode = None, segmentparams = [None,None], showsummaryflag = True, summarychid = None):
 
+=======
+def segmentation(filepath, stepno, startcodes = None, startLatency = None, endLatency = None, maxLatency = 5):
+    
+    npy_data, meta_data, npyfilepath, metafilepath =loadalldata(filepath)
+>>>>>>> Stashed changes
     extn_str = f"{stepno}_ep "
     errorflag = 0
-    if startcode == None:
-        startcode = np.array([10, 45, 90, 135, 200, 210, 212, 214, 216, 218, 220, 222, 224])
-    
-    endcode = startcode + 1
-    if segmentparams == [None,None]:
-        segmentparams = np.array([70, -2])
+    if startcodes == None:
+        eventcodes,counts = np.unique(meta_data["events"]["code"], return_counts = True)
+        is_numeric = np.char.isdigit(eventcodes)
+        eventcodes = eventcodes[is_numeric].astype(int)
+        counts = counts[is_numeric].astype(int)
 
-    if len(segmentparams) != 2:
-        raise InvalidLengthError(f"expected an array of length instead got length{len(segmentparams)}, reneter your segmentation parameters as [duration(in seconds), start latency]")
+        indices_to_delete = np.where(counts > maxLatency)[0]
+        indices_to_delete = np.sort(indices_to_delete)[::-1]
+
+        counts = np.delete(counts,indices_to_delete)
+        eventcodes = np.delete(eventcodes,indices_to_delete)
+        print(eventcodes)
+        eventcodes_minusone = eventcodes-1
+        startcodes = np.isin(eventcodes_minusone,eventcodes)
+        print("the startcodes are:", startcodes)
+        endcodes = startcodes + 1
+        print("the endcodes are:", endcodes)
+    
+    if startLatency == None:
+        startLatency = -2
+
+    if endLatency == None:
+        endLatency = 70
+
         
-    npy_data, meta_data, npyfilepath, metafilepath =loadalldata(filepath)
-    fs = meta_data["fs"]
-    
-    startlatencyfromstart = segmentparams[1]
-    endlatencyfromstart = segmentparams[0] + segmentparams[1]
 
-    startlatencyfromend = segmentparams[0]
+    fs = meta_data["fs"]
+
+    duration = (endLatency-startLatency) * fs
+    startlatencyfromstart = startLatency
+    endlatencyfromstart = endLatency
+
+    startlatencyfromend = startLatency-endLatency
     endlatencyfromend = np.array([0])
 
     eventid = np.array(meta_data["events"]["code"])
     timestamps = np.array(meta_data["events"]["latency"], dtype=float)
-    duration = segmentparams[0] * fs
     
     unq_eventid = np.unique(eventid)
     mask = np.array([x.isnumeric() for x in unq_eventid])
@@ -493,11 +583,11 @@ def segmentation(filepath, stepno, startcode = None, segmentparams = [None,None]
     unq_eventid.sort()
     unq_eventid = unq_eventid.astype(str)
 
-    startcode_ind = np.where(np.isin(unq_eventid.astype(int), startcode))[0]
+    startcode_ind = np.where(np.isin(unq_eventid.astype(int), startcodes))[0]
     startevents = unq_eventid[startcode_ind]
     startevents.sort()
 
-    endcode_ind = np.where(np.isin(unq_eventid.astype(int), endcode))[0]
+    endcode_ind = np.where(np.isin(unq_eventid.astype(int), endcodes))[0]
     endevents = unq_eventid[endcode_ind]
     endevents.sort()
 
@@ -523,7 +613,7 @@ def segmentation(filepath, stepno, startcode = None, segmentparams = [None,None]
         for s in starts:
             diffs = stops - s
             # valid stops should be ~70s after start
-            valid = np.where((diffs > 0) & (np.abs(diffs - segmentparams[0]*fs) < fs))[0]
+            valid = np.where((diffs > 0) & (np.abs(diffs - endlatencyfromstart*fs) < fs))[0]
             if len(valid) > 0:
                 idx = valid[0]
                 pairs.append((int(s + startlatencyfromstart * fs), int(stops[idx])))
@@ -569,7 +659,7 @@ def segmentation(filepath, stepno, startcode = None, segmentparams = [None,None]
     eventrepdata = {}
     startendsampid = np.zeros([int(sum(eventreps)), 2])
 
-    for eventno in range(len(startcode)):
+    for eventno in range(len(startcodes)):
         numrep = []
         for iterid in range(int(eventreps[eventno])):
             dsamp_start = startendsample[eventno][iterid][0]
@@ -1096,11 +1186,6 @@ def showmesummaryplot(npy_data, meta_data):
     def plot_data(domain, selected_series, freq_range, epoch_idx=0):
         plt.figure(figsize=(10, 5))
     
-        if not selected_series:
-            plt.text(0.5, 0.5, "Select channels from the list", ha='center', va='center')
-            plt.show()
-            return
-    
         time_vector = np.arange(n_timepoints) / fs
     
         for s_idx in selected_series:
@@ -1129,7 +1214,14 @@ def showmesummaryplot(npy_data, meta_data):
                 plt.xlabel("Frequency (Hz)")
                 plt.ylabel(r"Magnitude ($\mu$V)")
                 plt.xlim(freq_min, freq_max)
+<<<<<<< Updated upstream
 
+=======
+                
+                if ylim != None:
+                    plt.ylim(0,ylim)
+        
+>>>>>>> Stashed changes
         plt.legend(loc='upper left', bbox_to_anchor=(1, 1))
         plt.grid(True, linestyle='--', alpha=0.6)
         # Apply the 1.2 Hz tick marks specifically when in the Frequency domain
@@ -1139,7 +1231,11 @@ def showmesummaryplot(npy_data, meta_data):
             plt.xticks(rotation=45) 
             
         title_suffix = f" | Epoch: {epoch_idx}" if len(npy_data.shape) == 3 else ""
+<<<<<<< Updated upstream
         plt.title(f"Domain: {domain}{title_suffix}")
+=======
+        plt.title(f"Subject id: {meta_data['name']} Domain: {domain}{title_suffix}")
+>>>>>>> Stashed changes
         plt.show()
             
     # 3. Base UI Widgets
@@ -1147,9 +1243,23 @@ def showmesummaryplot(npy_data, meta_data):
         options=['Time', 'Frequency'],
         value='Time',
         description='Domain:',
+<<<<<<< Updated upstream
         button_style='info'
     )
 
+=======
+        button_style='info')
+    
+    freq_slider = widgets.IntRangeSlider(
+        value=[0, time_in_sec] ,
+        min=0,
+        max=time_in_sec,
+        step=1,
+        description='Time(s):',
+        continuous_update=False,  # Updates plot only when you release the mouse
+        layout={'width': '500px'})
+    
+>>>>>>> Stashed changes
     series_selector = widgets.SelectMultiple(
         options=[(labels[i], i) for i in range(npy_data.shape[1])],
         value=[0, 1, 2, 3],  
@@ -1176,6 +1286,16 @@ def showmesummaryplot(npy_data, meta_data):
     else:
         controls = widgets.VBox([series_selector])
 
+<<<<<<< Updated upstream
+=======
+    domain_switch.observe(on_domain_change, names='value')
+    
+    #defining the new widget dictionary
+    widget_dict = {'domain': domain_switch,
+                   'selected_series': series_selector,
+                   'freq_range': freq_slider}
+    
+>>>>>>> Stashed changes
     out = widgets.interactive_output(plot_data, widget_dict)
 
         # 5. Dynamic Slider Visibility (Shows slider ONLY during Frequency Mode)

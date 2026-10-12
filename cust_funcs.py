@@ -64,23 +64,23 @@ def rebrand_lw6data(filepath):
         "fs": "Sampling frequency in Hz",
         "activation": "microvolts",
     }
-
+    print(np.squeeze(meta_data["header"]["datasize"]))
     new_data = {
         "filetype": np.squeeze(meta_data["header"]["filetype"]),
         "name": np.squeeze(meta_data["header"]["name"]),
         "tags": {},
         "history": {},
         "origins": org_data,
-        "datasize": np.squeeze(meta_data["header"]["datasize"]),
-        "xstart": np.squeeze(meta_data["header"]["xstart"]),
-        "ystart": np.squeeze(meta_data["header"]["ystart"]),
-        "zstart": np.squeeze(meta_data["header"]["zstart"]),
-        "xstep": np.squeeze(meta_data["header"]["xstep"]),
-        "ystep": np.squeeze(meta_data["header"]["ystep"]),
-        "zstep": np.squeeze(meta_data["header"]["zstep"]),
+        "datasize": np.squeeze(meta_data["header"]["datasize"][0]),
+        "xstart": np.squeeze(meta_data["header"]["xstart"][0][0]),
+        "ystart": np.squeeze(meta_data["header"]["ystart"][0][0]),
+        "zstart": np.squeeze(meta_data["header"]["zstart"][0][0]),
+        "xstep": np.squeeze(meta_data["header"]["xstep"][0][0]),
+        "ystep": np.squeeze(meta_data["header"]["ystep"][0][0]),
+        "zstep": np.squeeze(meta_data["header"]["zstep"][0][0]),
         "chanlocs": chanlocs,
         "events": events,
-        "fs": 2048,
+        "fs": int(1/np.squeeze(meta_data["header"]["xstep"][0][0])),
         "activation": "microvolts",
         "fields": fields
     }
@@ -180,9 +180,61 @@ def updatemetadataHistory(meta_data,step_prefix):
 #     plt.title(titlestr)
 #     plt.show()
 
+<<<<<<< Updated upstream
 # def showmeSignal(signal,duration=None,pltsize=None,titlestr=None,epochid=None):
 #     import numpy as np
 #     import matplotlib.pyplot as plt
+=======
+    Parameters
+    ----------
+    signal : array_like
+        The input signal to transform.
+    returnamp_db : str, default 'amp'
+        Which representation to return. Must be one of:
+            'db'    - magnitude in decibels (default)
+            'pow'   - raw power spectrum
+            'amp'   - linear amplitude
+            'welch' - Welch's method (power spectral density estimate)
+    """
+    import scipy as sci
+    if signal.shape[1]>signal.shape[0] :
+        signal = np.transpose(signal)
+        
+    n_timepoints = signal.shape[0]
+    freqs=np.fft.fftfreq(n_timepoints,1/fs)
+    idx = (freqs >= 0)
+    fft_vals = np.zeros([len(freqs[idx]), signal.shape[1]])
+    if returnamp_db == 'db':
+        for chid in range(signal.shape[1]):
+            FFT_vals = np.abs(np.fft.fft(signal[:,chid])) 
+            FFT_vals = (FFT_vals**2 / n_timepoints**2)
+            FFT_vals = 10 * np.log10(FFT_vals) #converts to dB
+            fft_vals[:,chid] = FFT_vals[idx]
+    elif returnamp_db == 'amp':
+        for chid in range(signal.shape[1]):
+            FFT_vals = np.abs(np.fft.fft(signal[:,chid]))/n_timepoints
+            fft_vals[:,chid] = FFT_vals[idx]
+    elif returnamp_db == 'pow':
+        for chid in range(signal.shape[1]):
+            FFT_vals = np.abs(np.fft.fft(signal[:,chid])) 
+            FFT_vals = (FFT_vals**2 / n_timepoints**2)#normalize 
+            fft_vals[:,chid] = FFT_vals[idx]
+    elif returnamp_db == 'welch':
+        signal_time = signal.shape[1]//fs
+        epoch_time = fs*(signal_time//10)
+        for chid in range(signal.shape[1]):
+            freqs,fft = sci.signal.welch(signal, fs=fs, nperseg=epoch_time, noverlap=epoch_time//2)
+            if chid == 0:
+                idx = (freq >= 0)
+                fft_vals = np.zeros([len(freqs[idx]),signal.shape[1]])
+            fft_vals[:,chid] = fft[idx]
+    print("array has a dimension of:", fft_vals.shape)
+    return fft_vals, freqs[idx],freqs
+    
+def showmeSignal(signal,duration=None,pltsize=None,titlestr=None,epochid=None):
+    import numpy as np
+    import matplotlib.pyplot as plt
+>>>>>>> Stashed changes
 
 #     if len(signal.shape)>1:
 #         signal = np.squeeze(signal)
