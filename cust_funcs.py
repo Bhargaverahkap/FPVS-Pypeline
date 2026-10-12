@@ -29,10 +29,21 @@ def rebrand_lw6data(filepath):
         "SEEG_enabled" : np.squeeze(meta_data["header"]["chanlocs"][0][0]["SEEG_enabled"])
         }
 
-    allevents = meta_data["header"]["events"][0][0][0]
-    code = np.array([l[0][0] for l in allevents])
-    latency = np.array([l[1][0][0] for l in allevents])
-    epoch = np.array([l[2][0][0] for l in allevents])
+    # A recording with no triggers stores an empty events array, and indexing
+    # into that raised "index 0 is out of bounds for axis 0 with size 0".
+    # Flattening handles the singleton dimension matlab adds without collapsing
+    # a single event down to a scalar, and leaves an empty array empty.
+    allevents = np.asarray(meta_data["header"]["events"][0][0]).reshape(-1)
+
+    if allevents.size == 0:
+        print("no events found in", filepath)
+        code = np.array([], dtype=object)
+        latency = np.array([], dtype=float)
+        epoch = np.array([], dtype=float)
+    else:
+        code = np.array([l[0][0] for l in allevents])
+        latency = np.array([l[1][0][0] for l in allevents])
+        epoch = np.array([l[2][0][0] for l in allevents])
 
     events = {
         "code": code,
@@ -179,12 +190,10 @@ def updatemetadataHistory(meta_data,step_prefix):
 #     plt.legend(legendstr,loc="upper right")
 #     plt.title(titlestr)
 #     plt.show()
+def givemeFFT(signal,fs=256,returnamp_db= 'db'):
+    """
+    Compute the FFT of a signal using one of four supported methods.
 
-<<<<<<< Updated upstream
-# def showmeSignal(signal,duration=None,pltsize=None,titlestr=None,epochid=None):
-#     import numpy as np
-#     import matplotlib.pyplot as plt
-=======
     Parameters
     ----------
     signal : array_like
@@ -194,7 +203,7 @@ def updatemetadataHistory(meta_data,step_prefix):
             'db'    - magnitude in decibels (default)
             'pow'   - raw power spectrum
             'amp'   - linear amplitude
-            'welch' - Welch's method (power spectral density estimate)
+
     """
     import scipy as sci
     if signal.shape[1]>signal.shape[0] :
@@ -234,41 +243,40 @@ def updatemetadataHistory(meta_data,step_prefix):
 def showmeSignal(signal,duration=None,pltsize=None,titlestr=None,epochid=None):
     import numpy as np
     import matplotlib.pyplot as plt
->>>>>>> Stashed changes
 
-#     if len(signal.shape)>1:
-#         signal = np.squeeze(signal)
+    if len(signal.shape)>1:
+        signal = np.squeeze(signal)
 
-#     if epochid is None:
-#         epochid = 0
+    if epochid is None:
+        epochid = 0
 
-#     if duration is None:
-#         duration = np.linspace(0,len(signal)-1,len(signal),dtype=int)
+    if duration is None:
+        duration = np.linspace(0,len(signal)-1,len(signal),dtype=int)
 
-#     if pltsize is None:
-#         pltsize = [12, 4]
+    if pltsize is None:
+        pltsize = [12, 4]
 
-#     if titlestr is None:
-#         titlestr = "Channel activation"
+    if titlestr is None:
+        titlestr = "Channel activation"
 
-#     #actual plotting
-#     plt.figure(figsize=pltsize)
-#     plt.plot(duration,signal,lw=1)
-#     plt.title(titlestr)
-#     plt.xlabel("Samples")
-#     plt.ylabel("amplitude")
-#     legendstr = [f"epoch:{epochid}"]
-#     if len(signal.shape) >1:
-#         legend_labels = [f"line {i}" for i in range(signal.shape[1])]
+    #actual plotting
+    plt.figure(figsize=pltsize)
+    plt.plot(duration,signal,lw=1)
+    plt.title(titlestr)
+    plt.xlabel("Samples")
+    plt.ylabel("amplitude")
+    legendstr = [f"epoch:{epochid}"]
+    if len(signal.shape) >1:
+        legend_labels = [f"line {i}" for i in range(signal.shape[1])]
 
-#     if len(signal.shape)==1:
-#         plt.legend(legendstr,loc="upper right")
-#     else:
-#         plt.legend(legend_labels,loc="upper left", bbox_to_anchor=(1, 1))
-#         plt.subplots_adjust(right=0.75)
+    if len(signal.shape)==1:
+        plt.legend(legendstr,loc="upper right")
+    else:
+        plt.legend(legend_labels,loc="upper left", bbox_to_anchor=(1, 1))
+        plt.subplots_adjust(right=0.75)
 
-#     plt.figure
-#     plt.show()
+    plt.figure
+    plt.show()
 
 # def showmeSummaryPlot(signal,fs,chname,subjid,pltsize=None,freqlim=None,epochid=None):
 #     import numpy as np
@@ -1022,20 +1030,20 @@ def showmeICAoverlayedondata(npy_data, ica_data ,labels, chid = None, subjid = N
     signal = npy_data[ :, chid ]
 
     # Normalize function (important for visual comparison)
-    def normalize(x): return (x - np.mean(x)) / np.std(x)
+    def normalize(x): return (x - np.mean(x))/np.std(x)
 
-    signal_norm = normalize(signal) #Normalize the signal
-
+    # signal_norm = normalize(signal) #Normalize the signal
+    print('shape of the normalized signal is' ,signal.shape)
     def overlay_data(ICA_id):
         plt.figure(figsize=(10, 5))
 
         # ICA component
         ICA_signal = ica_data[ICA_id, :]
-        ICA_norm = normalize(ICA_signal)
+        # ICA_norm = normalize(ICA_signal)
 
         # Plot
-        plt.plot(signal_norm, label=f"EEG Channel {chname}", color='blue')
-        plt.plot(ICA_norm, label=f"ICA Component {ICA_id}", color='red', alpha=0.7)
+        plt.plot(np.squeeze(normalize(signal)), label=f"EEG Channel {chname}", color='blue')
+        plt.plot(np.squeeze((ICA_signal)), label=f"ICA Component {ICA_id}", color='red', alpha=0.7)
         if subjid != None:
             plt.title(f"ICA {ICA_id} vs Channel {chname} for {subjid}")
         else:
